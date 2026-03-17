@@ -32,12 +32,10 @@ import {
   FileText,
   Sun,
   Moon,
+  LogIn,
   ArrowUpDown,
   Clock,
   Sparkles,
-  Wand2,
-  Loader2,
-  BrainCircuit,
   Download,
   Upload,
   FileJson,
@@ -45,7 +43,6 @@ import {
   LayoutGrid,
   List
 } from 'lucide-react';
-import { GoogleGenAI, Type } from "@google/genai";
 import { Item, Category, CATEGORIES, INITIAL_ITEMS } from './types';
 import { 
   auth, 
@@ -192,6 +189,7 @@ export default function App() {
   const [isBudgetModalOpen, setIsBudgetModalOpen] = useState(false);
   const [isManageCategoriesModalOpen, setIsManageCategoriesModalOpen] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [isBudgetAnalysisModalOpen, setIsBudgetAnalysisModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<Item | null>(null);
   const [activeCategory, setActiveCategory] = useState<Category | 'Tümü'>(() => {
     const saved = localStorage.getItem('ceyiz_active_category');
@@ -200,20 +198,23 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [toast, setToast] = useState<{ id: string, message: string, itemId: string } | null>(null);
   const [expandedItemId, setExpandedItemId] = useState<string | null>(null);
+  const [selectedItemDetail, setSelectedItemDetail] = useState<Item | null>(null);
   const [isGroupedByCategory, setIsGroupedByCategory] = useState(() => {
     const saved = localStorage.getItem('ceyiz_grouped');
     return saved === 'true';
   });
   const [sortBy, setSortBy] = useState<'date-newest' | 'date-oldest' | 'price-asc' | 'price-desc'>('date-newest');
   const [filterStatus, setFilterStatus] = useState<'all' | 'bought' | 'remaining'>('all');
-  const [isAISuggestionsModalOpen, setIsAISuggestionsModalOpen] = useState(false);
-  const [aiSuggestions, setAiSuggestions] = useState<{ name: string, category: string, reason: string }[]>([]);
-  const [isAILoading, setIsAILoading] = useState(false);
   const [viewingItemsType, setViewingItemsType] = useState<'bought' | 'remaining' | null>(null);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const saved = localStorage.getItem('ceyiz_theme');
-    return (saved as 'light' | 'dark') || 'dark';
+    return (saved as 'light' | 'dark') || 'light';
   });
+  const [colorTheme, setColorTheme] = useState<string>(() => {
+    const saved = localStorage.getItem('ceyiz_color_theme');
+    return saved || 'rose';
+  });
+  const [isThemeSelectorOpen, setIsThemeSelectorOpen] = useState(false);
 
   const [user, setUser] = useState<any>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
@@ -255,6 +256,7 @@ export default function App() {
         if (data.budget) setBudget(data.budget);
         if (data.categories) setCategories(data.categories);
         if (data.theme) setTheme(data.theme);
+        if (data.colorTheme) setColorTheme(data.colorTheme);
         if (data.viewMode) setViewMode(data.viewMode);
       }
     }, (error) => handleFirestoreError(error, OperationType.GET, `users/${user.uid}/settings/current`));
@@ -295,6 +297,7 @@ export default function App() {
           budget,
           categories,
           theme,
+          colorTheme,
           viewMode
         });
 
@@ -318,6 +321,11 @@ export default function App() {
       document.documentElement.classList.remove('dark');
     }
   }, [theme]);
+
+  useEffect(() => {
+    localStorage.setItem('ceyiz_color_theme', colorTheme);
+    document.documentElement.setAttribute('data-color-theme', colorTheme);
+  }, [colorTheme]);
 
   useEffect(() => {
     if (toast) {
@@ -360,73 +368,6 @@ export default function App() {
     }
   }, []);
 
-  const handleGetAISuggestions = async () => {
-    if (isAILoading) return;
-    setIsAILoading(true);
-    try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
-      const model = "gemini-3-flash-preview";
-      
-      const currentItemsList = items.map(i => `${i.name} (${i.category})`).join(", ");
-      const prompt = `Sen bir çeyiz danışmanısın. Kullanıcının mevcut çeyiz listesi şudur: ${currentItemsList}. 
-      Bu listeyi analiz et ve eksik olabilecek, evlilik hazırlığında mutlaka olması gereken 5 farklı ürün öner. 
-      Önerilerin mevcut listede olmamalıdır. Her öneri için bir isim, uygun bir kategori (${CATEGORIES.join(", ")}) ve neden önerdiğine dair kısa bir açıklama (Türkçe) ver.`;
-
-      const response = await ai.models.generateContent({
-        model,
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                name: { type: Type.STRING },
-                category: { type: Type.STRING },
-                reason: { type: Type.STRING }
-              },
-              required: ["name", "category", "reason"]
-            }
-          }
-        }
-      });
-
-      if (response.text) {
-        const suggestions = JSON.parse(response.text);
-        setAiSuggestions(suggestions);
-      }
-    } catch (error) {
-      console.error("AI Error:", error);
-    } finally {
-      setIsAILoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (isAISuggestionsModalOpen && aiSuggestions.length === 0) {
-      handleGetAISuggestions();
-    }
-  }, [isAISuggestionsModalOpen]);
-
-  const handleAddSuggestedItem = (suggestion: { name: string, category: string }) => {
-    const newItem = {
-      name: suggestion.name,
-      category: suggestion.category,
-      price: 0,
-      isBought: false,
-      id: crypto.randomUUID(),
-      createdAt: Date.now()
-    };
-    setItems(prev => [...prev, newItem]);
-    setAiSuggestions(prev => prev.filter(s => s.name !== suggestion.name));
-    setToast({ 
-      id: Date.now().toString(), 
-      message: `${suggestion.name} listeye eklendi!`, 
-      itemId: newItem.id 
-    });
-  };
-
   const handleImportData = (data: { items: Item[], budget: number, categories: Category[] }) => {
     if (data.items) setItems(data.items);
     if (data.budget) setBudget(data.budget);
@@ -444,7 +385,7 @@ export default function App() {
     setItems(INITIAL_ITEMS);
     setBudget(200000);
     setCategories(CATEGORIES);
-    setTheme('dark');
+    setTheme('light');
     setActiveCategory('Tümü');
     setIsGroupedByCategory(false);
     if (user) {
@@ -526,7 +467,9 @@ export default function App() {
       const total = categoryItems.length;
       const bought = categoryItems.filter(item => item.isBought).length;
       const percentage = total === 0 ? 0 : Math.round((bought / total) * 100);
-      return { category, total, bought, percentage };
+      const spent = categoryItems.filter(item => item.isBought).reduce((sum, item) => sum + item.price, 0);
+      const estimatedTotal = categoryItems.reduce((sum, item) => sum + item.price, 0);
+      return { category, total, bought, percentage, spent, estimatedTotal };
     });
   }, [items, categories]);
 
@@ -590,54 +533,23 @@ export default function App() {
           exit={{ opacity: 0, scale: 0.9 }}
           className={`group relative bg-white dark:bg-stone-900 rounded-2xl border border-stone-200 dark:border-stone-800 overflow-hidden hover:shadow-md transition-all ${item.isBought ? 'opacity-75' : ''}`}
         >
-          <div className="aspect-square relative overflow-hidden bg-stone-100 dark:bg-stone-800">
-            {item.image ? (
-              <img src={item.image} alt={item.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center text-stone-300 dark:text-stone-700">
-                <ImageIcon size={48} />
-              </div>
-            )}
-            <button 
-              onClick={() => toggleItemStatus(item.id)}
-              className={`absolute top-3 left-3 w-8 h-8 rounded-full flex items-center justify-center backdrop-blur-md transition-all ${
-                item.isBought 
-                  ? 'bg-emerald-500 text-white' 
-                  : 'bg-white/80 dark:bg-stone-900/80 text-stone-400 hover:text-emerald-500 shadow-sm'
-              }`}
-            >
-              {item.isBought ? <CheckCircle2 size={20} /> : <Circle size={20} />}
-            </button>
-            <div className="absolute top-3 right-3 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button 
-                onClick={() => setEditingItem(item)}
-                className="w-8 h-8 rounded-full bg-white/80 dark:bg-stone-900/80 backdrop-blur-md flex items-center justify-center text-stone-600 dark:text-stone-400 hover:text-blue-500 shadow-sm"
-              >
-                <Edit2 size={16} />
-              </button>
-              <button 
-                onClick={() => handleDeleteItem(item.id)}
-                className="w-8 h-8 rounded-full bg-white/80 dark:bg-stone-900/80 backdrop-blur-md flex items-center justify-center text-stone-600 dark:text-stone-400 hover:text-rose-500 shadow-sm"
-              >
-                <Trash2 size={16} />
-              </button>
+          <div 
+            className="p-4 cursor-pointer"
+            onClick={() => setSelectedItemDetail(item)}
+          >
+            <div className="aspect-square relative overflow-hidden bg-stone-100 dark:bg-stone-800 rounded-xl mb-3">
+              {item.image ? (
+                <img src={item.image} alt={item.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-stone-300 dark:text-stone-700">
+                  <ImageIcon size={48} />
+                </div>
+              )}
             </div>
-          </div>
-          <div className="p-4">
             <div className="flex items-start justify-between gap-2 mb-2">
               <h3 className={`text-sm font-semibold line-clamp-2 ${item.isBought ? 'text-stone-500 line-through' : 'text-stone-900 dark:text-stone-100'}`}>
                 {item.name}
               </h3>
-              {item.link && (
-                <a 
-                  href={item.link} 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="text-blue-500 hover:text-blue-600 transition-colors shrink-0"
-                >
-                  <ExternalLink size={14} />
-                </a>
-              )}
             </div>
             <div className="flex items-center justify-between mt-auto">
               <span className={`text-xs font-bold ${item.isBought ? 'text-stone-400' : 'text-rose-600 dark:text-rose-400'}`}>
@@ -647,6 +559,32 @@ export default function App() {
                 {item.category}
               </span>
             </div>
+          </div>
+          <div className="absolute top-3 left-3 z-10">
+            <button 
+              onClick={(e) => { e.stopPropagation(); toggleItemStatus(item.id); }}
+              className={`w-8 h-8 rounded-full flex items-center justify-center backdrop-blur-md transition-all ${
+                item.isBought 
+                  ? 'bg-emerald-500 text-white' 
+                  : 'bg-white/80 dark:bg-stone-900/80 text-stone-400 hover:text-emerald-500 shadow-sm'
+              }`}
+            >
+              {item.isBought ? <CheckCircle2 size={20} /> : <Circle size={20} />}
+            </button>
+          </div>
+          <div className="absolute top-3 right-3 z-10 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button 
+              onClick={(e) => { e.stopPropagation(); setEditingItem(item); }}
+              className="w-8 h-8 rounded-full bg-white/80 dark:bg-stone-900/80 backdrop-blur-md flex items-center justify-center text-stone-600 dark:text-stone-400 hover:text-blue-500 shadow-sm"
+            >
+              <Edit2 size={16} />
+            </button>
+            <button 
+              onClick={(e) => { e.stopPropagation(); handleDeleteItem(item.id); }}
+              className="w-8 h-8 rounded-full bg-white/80 dark:bg-stone-900/80 backdrop-blur-md flex items-center justify-center text-stone-600 dark:text-stone-400 hover:text-rose-500 shadow-sm"
+            >
+              <Trash2 size={16} />
+            </button>
           </div>
         </motion.div>
       );
@@ -679,23 +617,16 @@ export default function App() {
           
           <div 
             className="flex-1 min-w-0 cursor-pointer"
-            onClick={() => setExpandedItemId(prev => prev === item.id ? null : item.id)}
+            onClick={() => setSelectedItemDetail(item)}
           >
             <div className="flex items-center gap-2">
               <p className={`text-sm font-medium truncate ${item.isBought ? 'text-stone-500 dark:text-stone-500 line-through' : 'text-stone-900 dark:text-stone-100'}`}>
                 {item.name}
               </p>
               {item.link && (
-                <a 
-                  href={item.link} 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  onClick={(e) => e.stopPropagation()}
-                  className="text-blue-500 dark:text-blue-400 hover:text-blue-600 dark:hover:text-blue-300 transition-colors"
-                  title="Ürün Linkine Git"
-                >
+                <span className="text-blue-500 dark:text-blue-400">
                   <LinkIcon size={14} />
-                </a>
+                </span>
               )}
               {item.notes && (
                 <Info size={14} className="text-stone-400 dark:text-stone-600" />
@@ -837,7 +768,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-stone-50 dark:bg-stone-950 text-stone-800 dark:text-stone-200 font-sans selection:bg-rose-200 transition-colors duration-300">
+    <div className="min-h-screen bg-stone-50 dark:bg-stone-950 text-stone-800 dark:text-stone-200 font-sans selection:bg-accent-200 transition-colors duration-300">
       {/* Toast Notification */}
       <AnimatePresence>
         {toast && (
@@ -902,10 +833,28 @@ export default function App() {
                 onClick={handleLogin}
                 className="flex items-center gap-2 text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 px-3 py-2 rounded-xl transition-colors"
               >
-                <Wand2 size={18} />
+                <LogIn size={18} />
                 <span>Giriş Yap</span>
               </button>
             )}
+            <motion.button
+              whileTap={{ scale: 0.9 }}
+              whileHover={{ scale: 1.05 }}
+              onClick={() => setIsBudgetAnalysisModalOpen(true)}
+              className="relative p-2 w-10 h-10 flex items-center justify-center rounded-xl bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 transition-colors border border-emerald-100 dark:border-emerald-900/30 shadow-sm"
+              title="Bütçe Analizi"
+            >
+              <Wallet size={20} />
+            </motion.button>
+            <motion.button
+              whileTap={{ scale: 0.9 }}
+              whileHover={{ scale: 1.05 }}
+              onClick={() => setIsThemeSelectorOpen(true)}
+              className="relative p-2 w-10 h-10 flex items-center justify-center rounded-xl bg-accent-50 dark:bg-accent-900/20 text-accent-600 dark:text-accent-400 transition-colors border border-accent-100 dark:border-accent-900/30 shadow-sm"
+              title="Tema Seç"
+            >
+              <Sparkles size={20} />
+            </motion.button>
             <motion.button
               whileTap={{ scale: 0.9 }}
               whileHover={{ scale: 1.05 }}
@@ -968,20 +917,13 @@ export default function App() {
         <section>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-medium text-stone-900 dark:text-stone-100 flex items-center gap-2">
-              <PieChart size={20} className="text-rose-500" />
+              <PieChart size={20} className="text-accent-500" />
               Genel Bakış
             </h2>
             <div className="flex items-center gap-2">
               <button 
-                onClick={() => setIsAISuggestionsModalOpen(true)}
-                className="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 dark:bg-indigo-900/20 rounded-lg transition-colors"
-              >
-                <Sparkles size={16} />
-                Yapay Zeka Önerileri
-              </button>
-              <button 
                 onClick={() => setIsReportModalOpen(true)}
-                className="text-sm font-medium text-rose-600 hover:text-rose-700 flex items-center gap-1.5 px-3 py-1.5 bg-rose-50 dark:bg-rose-900/20 rounded-lg transition-colors"
+                className="text-sm font-medium text-accent-600 hover:text-accent-700 flex items-center gap-1.5 px-3 py-1.5 bg-accent-50 dark:bg-accent-900/20 rounded-lg transition-colors"
               >
                 <FileText size={16} />
                 Detaylı Rapor
@@ -1006,7 +948,7 @@ export default function App() {
               title="Harcanan Tutar" 
               value={formatCurrency(stats.totalSpent)} 
               subtitle={`Kalan Bütçe: ${formatCurrency(stats.remainingBudget)}`}
-              valueColor="text-rose-600"
+              valueColor="text-accent-600"
             />
           </div>
           
@@ -1015,12 +957,12 @@ export default function App() {
             whileHover={{ scale: 1.01 }}
             whileTap={{ scale: 0.99 }}
             onClick={() => setIsProgressReportModalOpen(true)}
-            className="mt-6 w-full text-left bg-white dark:bg-stone-900 p-4 rounded-2xl border border-stone-200 dark:border-stone-800 shadow-sm hover:border-rose-300 dark:hover:border-rose-900/50 transition-all group"
+            className="mt-6 w-full text-left bg-white dark:bg-stone-900 p-4 rounded-2xl border border-stone-200 dark:border-stone-800 shadow-sm hover:border-accent-300 dark:hover:border-accent-900/50 transition-all group"
           >
             <div className="flex justify-between text-sm font-medium mb-2">
               <div className="flex items-center gap-2">
                 <span className="text-stone-500 dark:text-stone-400">İlerleme</span>
-                <span className="text-[10px] bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 px-2 py-0.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">Detayları Gör</span>
+                <span className="text-[10px] bg-accent-50 dark:bg-accent-900/20 text-accent-600 dark:text-accent-400 px-2 py-0.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">Detayları Gör</span>
               </div>
               <span className="text-stone-900 dark:text-stone-100">{stats.completionRate}%</span>
             </div>
@@ -1029,7 +971,7 @@ export default function App() {
                 initial={{ width: 0 }}
                 animate={{ width: `${stats.completionRate}%` }}
                 transition={{ duration: 1, ease: "easeOut" }}
-                className="h-full bg-gradient-to-r from-rose-400 to-rose-500 rounded-full"
+                className="h-full bg-gradient-to-r from-accent-400 to-accent-500 rounded-full"
               />
             </div>
           </motion.button>
@@ -1039,7 +981,7 @@ export default function App() {
         <section>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
             <h2 className="text-lg font-medium text-stone-900 dark:text-stone-100 flex items-center gap-2">
-              <TrendingUp size={20} className="text-rose-500" />
+              <TrendingUp size={20} className="text-accent-500" />
               Alışveriş Listesi
             </h2>
             <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
@@ -1050,7 +992,7 @@ export default function App() {
                   placeholder="Ürün ara..." 
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 dark:text-stone-200 transition-all"
+                  className="w-full pl-10 pr-4 py-2 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 dark:text-stone-200 transition-all"
                 />
               </div>
               <button 
@@ -1106,14 +1048,14 @@ export default function App() {
             <div className="flex items-center bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-full p-1 shadow-sm">
               <button
                 onClick={() => setViewMode('list')}
-                className={`p-1.5 rounded-full transition-all ${viewMode === 'list' ? 'bg-stone-100 dark:bg-stone-800 text-rose-500' : 'text-stone-400 hover:text-stone-600'}`}
+                className={`p-1.5 rounded-full transition-all ${viewMode === 'list' ? 'bg-stone-100 dark:bg-stone-800 text-accent-500' : 'text-stone-400 hover:text-stone-600'}`}
                 title="Liste Görünümü"
               >
                 <List size={16} />
               </button>
               <button
                 onClick={() => setViewMode('grid')}
-                className={`p-1.5 rounded-full transition-all ${viewMode === 'grid' ? 'bg-stone-100 dark:bg-stone-800 text-rose-500' : 'text-stone-400 hover:text-stone-600'}`}
+                className={`p-1.5 rounded-full transition-all ${viewMode === 'grid' ? 'bg-stone-100 dark:bg-stone-800 text-accent-500' : 'text-stone-400 hover:text-stone-600'}`}
                 title="Izgara Görünümü"
               >
                 <LayoutGrid size={16} />
@@ -1196,6 +1138,13 @@ export default function App() {
 
       {/* Modals */}
       <AnimatePresence>
+        {isThemeSelectorOpen && (
+          <ThemeSelectorModal 
+            onClose={() => setIsThemeSelectorOpen(false)}
+            currentColorTheme={colorTheme}
+            onSelect={setColorTheme}
+          />
+        )}
         {isAddModalOpen && (
           <ItemModal 
             onClose={() => setIsAddModalOpen(false)} 
@@ -1253,13 +1202,16 @@ export default function App() {
             formatCurrency={formatCurrency}
           />
         )}
-        {isAISuggestionsModalOpen && (
-          <AISuggestionsModal 
-            onClose={() => setIsAISuggestionsModalOpen(false)}
-            suggestions={aiSuggestions}
-            onAdd={handleAddSuggestedItem}
-            isLoading={isAILoading}
-            onRefresh={handleGetAISuggestions}
+        {selectedItemDetail && (
+          <ItemDetailModal
+            item={selectedItemDetail}
+            onClose={() => setSelectedItemDetail(null)}
+            onEdit={(item) => {
+              setSelectedItemDetail(null);
+              setEditingItem(item);
+            }}
+            onToggleStatus={toggleItemStatus}
+            formatCurrency={formatCurrency}
           />
         )}
       </AnimatePresence>
@@ -1267,109 +1219,125 @@ export default function App() {
   );
 }
 
-function AISuggestionsModal({ 
+
+
+function ItemDetailModal({ 
+  item, 
   onClose, 
-  suggestions, 
-  onAdd, 
-  isLoading,
-  onRefresh
+  onEdit, 
+  onToggleStatus,
+  formatCurrency 
 }: { 
+  item: Item, 
   onClose: () => void, 
-  suggestions: { name: string, category: string, reason: string }[],
-  onAdd: (s: { name: string, category: string }) => void,
-  isLoading: boolean,
-  onRefresh: () => void
+  onEdit: (item: Item) => void,
+  onToggleStatus: (id: string) => void,
+  formatCurrency: (val: number) => string
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/40 dark:bg-stone-950/60 backdrop-blur-sm">
       <motion.div 
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        exit={{ opacity: 0, scale: 0.95 }}
-        className="bg-white dark:bg-stone-900 rounded-2xl shadow-xl w-full max-w-lg overflow-hidden border dark:border-stone-800"
+        initial={{ opacity: 0, scale: 0.95, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 20 }}
+        className="bg-white dark:bg-stone-900 rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden border dark:border-stone-800"
       >
-        <div className="px-6 py-4 border-b border-stone-100 dark:border-stone-800 flex justify-between items-center bg-indigo-50/50 dark:bg-indigo-900/10">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-indigo-100 dark:bg-indigo-900/30 rounded-lg flex items-center justify-center text-indigo-600 dark:text-indigo-400">
-              <BrainCircuit size={20} />
-            </div>
-            <div>
-              <h2 className="text-lg font-semibold text-stone-900 dark:text-stone-100">Yapay Zeka Önerileri</h2>
-              <p className="text-[10px] text-stone-500 dark:text-stone-400">Listeniz analiz edildi ve eksikler belirlendi</p>
-            </div>
-          </div>
-          <button onClick={onClose} className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 p-1">
-            <Plus size={24} className="rotate-45" />
-          </button>
-        </div>
-
-        <div className="p-6 max-h-[60vh] overflow-y-auto space-y-4 custom-scrollbar">
-          {isLoading ? (
-            <div className="py-12 flex flex-col items-center justify-center gap-4">
-              <div className="relative">
-                <Loader2 size={40} className="text-indigo-500 animate-spin" />
-                <Sparkles size={16} className="text-amber-400 absolute -top-1 -right-1 animate-pulse" />
-              </div>
-              <div className="text-center">
-                <p className="text-sm font-medium text-stone-900 dark:text-stone-100">Listeniz Analiz Ediliyor...</p>
-                <p className="text-xs text-stone-500 dark:text-stone-400 mt-1">Gemini AI en iyi önerileri hazırlıyor.</p>
-              </div>
-            </div>
-          ) : suggestions.length > 0 ? (
-            <div className="space-y-3">
-              {suggestions.map((suggestion, index) => (
-                <motion.div 
-                  key={index}
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: index * 0.1 }}
-                  className="p-4 bg-stone-50 dark:bg-stone-800/50 rounded-2xl border border-stone-100 dark:border-stone-800 group hover:border-indigo-200 dark:hover:border-indigo-900/30 transition-all"
-                >
-                  <div className="flex justify-between items-start gap-4">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="px-2 py-0.5 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 text-[10px] font-bold rounded-md uppercase tracking-wider">
-                          {suggestion.category}
-                        </span>
-                      </div>
-                      <h3 className="font-semibold text-stone-900 dark:text-stone-100">{suggestion.name}</h3>
-                      <p className="text-xs text-stone-500 dark:text-stone-400 mt-1 leading-relaxed italic">
-                        "{suggestion.reason}"
-                      </p>
-                    </div>
-                    <button 
-                      onClick={() => onAdd(suggestion)}
-                      className="flex-shrink-0 w-10 h-10 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl flex items-center justify-center text-indigo-600 dark:text-indigo-400 hover:bg-indigo-600 hover:text-white hover:border-indigo-600 transition-all shadow-sm group/btn"
-                      title="Listeye Ekle"
-                    >
-                      <Plus size={20} className="group-hover/btn:scale-110 transition-transform" />
-                    </button>
-                  </div>
-                </motion.div>
-              ))}
-            </div>
+        <div className="relative h-64 bg-stone-100 dark:bg-stone-800">
+          {item.image ? (
+            <img 
+              src={item.image} 
+              alt={item.name} 
+              className="w-full h-full object-cover" 
+              referrerPolicy="no-referrer"
+            />
           ) : (
-            <div className="py-8 text-center">
-              <p className="text-sm text-stone-500 dark:text-stone-400">Henüz öneri bulunamadı.</p>
+            <div className="w-full h-full flex items-center justify-center text-stone-300 dark:text-stone-700">
+              <ImageIcon size={64} />
             </div>
           )}
-        </div>
-
-        <div className="p-6 bg-stone-50 dark:bg-stone-800/30 border-t border-stone-100 dark:border-stone-800 flex gap-3">
           <button 
             onClick={onClose}
-            className="flex-1 px-4 py-2.5 border border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-400 rounded-xl font-medium hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors text-sm"
+            className="absolute top-4 right-4 w-10 h-10 bg-black/20 hover:bg-black/40 backdrop-blur-md text-white rounded-full flex items-center justify-center transition-colors"
           >
-            Kapat
+            <Plus size={24} className="rotate-45" />
           </button>
-          <button 
-            onClick={onRefresh}
-            disabled={isLoading}
-            className="flex-1 px-4 py-2.5 bg-indigo-600 text-white rounded-xl font-medium hover:bg-indigo-700 disabled:opacity-50 transition-all text-sm flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20"
-          >
-            <Wand2 size={16} className={isLoading ? 'animate-spin' : ''} />
-            Yeniden Analiz Et
-          </button>
+          <div className="absolute bottom-4 left-4">
+            <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider shadow-lg ${getCategoryBgColor(item.category)}`}>
+              {item.category}
+            </span>
+          </div>
+        </div>
+
+        <div className="p-6">
+          <div className="flex justify-between items-start gap-4 mb-6">
+            <div>
+              <h2 className={`text-2xl font-bold mb-1 ${item.isBought ? 'text-stone-500 line-through' : 'text-stone-900 dark:text-stone-100'}`}>
+                {item.name}
+              </h2>
+              <p className="text-xl font-bold text-rose-600 dark:text-rose-400">
+                {formatCurrency(item.price)}
+              </p>
+            </div>
+            <button 
+              onClick={() => onToggleStatus(item.id)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl font-medium transition-all ${
+                item.isBought 
+                  ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400' 
+                  : 'bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 hover:text-emerald-600'
+              }`}
+            >
+              {item.isBought ? <CheckCircle2 size={20} /> : <Circle size={20} />}
+              {item.isBought ? 'Alındı' : 'Alınmadı'}
+            </button>
+          </div>
+
+          <div className="space-y-6">
+            {item.notes && (
+              <div>
+                <h4 className="text-xs font-bold text-stone-400 dark:text-stone-600 uppercase tracking-widest mb-2 flex items-center gap-2">
+                  <FileText size={14} />
+                  Notlar
+                </h4>
+                <div className="p-4 bg-stone-50 dark:bg-stone-800/50 rounded-2xl border border-stone-100 dark:border-stone-800 text-stone-700 dark:text-stone-300 text-sm leading-relaxed">
+                  {item.notes}
+                </div>
+              </div>
+            )}
+
+            {item.link && (
+              <div>
+                <h4 className="text-xs font-bold text-stone-400 dark:text-stone-600 uppercase tracking-widest mb-2 flex items-center gap-2">
+                  <LinkIcon size={14} />
+                  Ürün Linki
+                </h4>
+                <a 
+                  href={item.link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-between p-4 bg-blue-50 dark:bg-blue-900/20 rounded-2xl border border-blue-100 dark:border-blue-900/30 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-all group"
+                >
+                  <span className="text-sm font-medium truncate flex-1 mr-4">{item.link}</span>
+                  <ExternalLink size={18} className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+                </a>
+              </div>
+            )}
+
+            <div className="flex gap-3 pt-4">
+              <button 
+                onClick={() => onEdit(item)}
+                className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-900 rounded-2xl font-bold hover:opacity-90 transition-opacity"
+              >
+                <Edit2 size={18} />
+                Düzenle
+              </button>
+              <button 
+                onClick={onClose}
+                className="px-6 py-3 border border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-400 rounded-2xl font-bold hover:bg-stone-50 dark:hover:bg-stone-800 transition-colors"
+              >
+                Kapat
+              </button>
+            </div>
+          </div>
         </div>
       </motion.div>
     </div>
@@ -1575,6 +1543,201 @@ function ManageCategoriesModal({
   );
 }
 
+function BudgetAnalysisModal({ 
+  onClose, 
+  stats, 
+  budget, 
+  categoryStats, 
+  formatCurrency 
+}: { 
+  onClose: () => void, 
+  stats: any, 
+  budget: number, 
+  categoryStats: any[], 
+  formatCurrency: (val: number) => string 
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/40 dark:bg-stone-950/60 backdrop-blur-sm">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 20 }}
+        className="bg-white dark:bg-stone-900 rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden border dark:border-stone-800 flex flex-col max-h-[90vh]"
+      >
+        <div className="p-6 border-b border-stone-100 dark:border-stone-800 flex justify-between items-center shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-emerald-50 dark:bg-emerald-900/20 rounded-xl">
+              <Wallet className="text-emerald-500" size={24} />
+            </div>
+            <div>
+              <h2 className="text-xl font-semibold text-stone-900 dark:text-white">Bütçe Analizi</h2>
+              <p className="text-xs text-stone-500 dark:text-stone-400">Harcamalarınızın detaylı bütçe görünümü</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-200 p-2 hover:bg-stone-100 dark:hover:bg-stone-800 rounded-full transition-colors">
+            <Plus className="rotate-45" size={24} />
+          </button>
+        </div>
+
+        <div className="p-6 overflow-y-auto space-y-8">
+          {/* Summary Cards */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="p-4 bg-stone-50 dark:bg-stone-800/50 rounded-2xl border border-stone-100 dark:border-stone-800">
+              <p className="text-[10px] text-stone-400 dark:text-stone-500 uppercase tracking-widest font-bold mb-1">Toplam Bütçe</p>
+              <p className="text-xl font-bold text-stone-900 dark:text-stone-100">{formatCurrency(budget)}</p>
+            </div>
+            <div className="p-4 bg-stone-50 dark:bg-stone-800/50 rounded-2xl border border-stone-100 dark:border-stone-800">
+              <p className="text-[10px] text-stone-400 dark:text-stone-500 uppercase tracking-widest font-bold mb-1">Harcanan Tutar</p>
+              <p className="text-xl font-bold text-rose-600 dark:text-rose-400">{formatCurrency(stats.totalSpent)}</p>
+            </div>
+          </div>
+
+          {/* Total Progress */}
+          <div className="space-y-3">
+            <div className="flex justify-between items-end">
+              <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100">Genel Bütçe Kullanımı</h3>
+              <span className={`text-sm font-bold ${stats.totalSpent > budget ? 'text-rose-500' : 'text-emerald-500'}`}>
+                %{budget > 0 ? Math.round((stats.totalSpent / budget) * 100) : 0}
+              </span>
+            </div>
+            <div className="h-4 bg-stone-100 dark:bg-stone-800 rounded-full overflow-hidden border border-stone-200 dark:border-stone-700">
+              <motion.div 
+                initial={{ width: 0 }}
+                animate={{ width: `${Math.min(100, budget > 0 ? (stats.totalSpent / budget) * 100 : 0)}%` }}
+                transition={{ duration: 1.2, ease: "circOut" }}
+                className={`h-full rounded-full ${stats.totalSpent > budget ? 'bg-rose-500' : 'bg-emerald-500'}`}
+              />
+            </div>
+            {stats.totalSpent > budget && (
+              <div className="p-3 bg-rose-50 dark:bg-rose-900/20 rounded-xl border border-rose-100 dark:border-rose-900/30 flex items-center gap-2 text-rose-600 dark:text-rose-400 text-xs font-medium">
+                <Info size={14} />
+                Bütçenizi {formatCurrency(stats.totalSpent - budget)} tutarında aştınız.
+              </div>
+            )}
+          </div>
+
+          {/* Category Breakdown */}
+          <div className="space-y-4">
+            <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100 uppercase tracking-wider flex items-center gap-2">
+              <div className="w-1 h-4 bg-emerald-500 rounded-full" />
+              Kategori Bazlı Harcama
+            </h3>
+            <div className="space-y-6">
+              {categoryStats.filter(s => s.estimatedTotal > 0).map(stat => (
+                <div key={stat.category} className="space-y-2">
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-2">
+                      <div className={`p-1.5 rounded-lg ${getCategoryBgColor(stat.category)}`}>
+                        {React.cloneElement(getCategoryIcon(stat.category) as React.ReactElement, { size: 14 })}
+                      </div>
+                      <span className="text-sm font-medium text-stone-700 dark:text-stone-300">{stat.category}</span>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm font-bold text-stone-900 dark:text-stone-100">{formatCurrency(stat.spent)}</p>
+                      <p className="text-[10px] text-stone-400 dark:text-stone-500">Tahmini Toplam: {formatCurrency(stat.estimatedTotal)}</p>
+                    </div>
+                  </div>
+                  <div className="h-2 bg-stone-100 dark:bg-stone-800 rounded-full overflow-hidden">
+                    <motion.div 
+                      initial={{ width: 0 }}
+                      animate={{ width: `${Math.min(100, budget > 0 ? (stat.spent / budget) * 100 : 0)}%` }}
+                      transition={{ duration: 1, delay: 0.2 }}
+                      className={`h-full rounded-full ${getCategoryColor(stat.category).split(' ')[0].replace('text-', 'bg-')}`}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="p-6 border-t border-stone-100 dark:border-stone-800 shrink-0">
+          <button 
+            onClick={onClose}
+            className="w-full py-3 bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-900 rounded-2xl font-bold hover:opacity-90 transition-opacity"
+          >
+            Anladım
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+function ThemeSelectorModal({ 
+  onClose, 
+  currentColorTheme, 
+  onSelect 
+}: { 
+  onClose: () => void, 
+  currentColorTheme: string, 
+  onSelect: (theme: string) => void 
+}) {
+  const THEMES = [
+    { id: 'rose', name: 'Gül Kurusu', color: 'bg-rose-500' },
+    { id: 'emerald', name: 'Zümrüt Yeşili', color: 'bg-emerald-500' },
+    { id: 'indigo', name: 'Zarif İndigo', color: 'bg-indigo-500' },
+    { id: 'amber', name: 'Sıcak Kehribar', color: 'bg-amber-500' },
+    { id: 'violet', name: 'Asil Menekşe', color: 'bg-violet-500' },
+    { id: 'slate', name: 'Modern Gri', color: 'bg-slate-500' },
+  ];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/40 dark:bg-stone-950/60 backdrop-blur-sm">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 20 }}
+        className="bg-white dark:bg-stone-900 rounded-3xl shadow-2xl w-full max-w-md overflow-hidden border dark:border-stone-800 flex flex-col"
+      >
+        <div className="p-6 border-b border-stone-100 dark:border-stone-800 flex justify-between items-center">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-accent-50 dark:bg-accent-900/20 rounded-xl">
+              <Sparkles className="text-accent-500" size={24} />
+            </div>
+            <div>
+              <h2 className="text-xl font-semibold text-stone-900 dark:text-white">Tema Seçimi</h2>
+              <p className="text-xs text-stone-500 dark:text-stone-400">Uygulamanın ana rengini değiştirin</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-200 p-2 hover:bg-stone-100 dark:hover:bg-stone-800 rounded-full transition-colors">
+            <Plus className="rotate-45" size={24} />
+          </button>
+        </div>
+
+        <div className="p-6 grid grid-cols-2 gap-4">
+          {THEMES.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => {
+                onSelect(t.id);
+                onClose();
+              }}
+              className={`flex items-center gap-3 p-3 rounded-2xl border-2 transition-all ${
+                currentColorTheme === t.id 
+                  ? 'border-accent-500 bg-accent-50/50 dark:bg-accent-900/10' 
+                  : 'border-stone-100 dark:border-stone-800 hover:border-stone-200 dark:hover:border-stone-700'
+              }`}
+            >
+              <div className={`w-6 h-6 rounded-full ${t.color} shadow-inner`} />
+              <span className="text-sm font-medium text-stone-700 dark:text-stone-300">{t.name}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="p-6 border-t border-stone-100 dark:border-stone-800">
+          <button 
+            onClick={onClose}
+            className="w-full py-3 bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-900 rounded-2xl font-bold hover:opacity-90 transition-opacity"
+          >
+            Kapat
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
 function ProgressReportModal({ 
   onClose, 
   stats,
@@ -1593,8 +1756,8 @@ function ProgressReportModal({
       >
         <div className="p-6 border-b border-stone-100 dark:border-stone-800 flex justify-between items-center shrink-0">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-rose-50 dark:bg-rose-900/20 rounded-xl">
-              <PieChart className="text-rose-500" size={24} />
+            <div className="p-2 bg-accent-50 dark:bg-accent-900/20 rounded-xl">
+              <PieChart className="text-accent-500" size={24} />
             </div>
             <div>
               <h2 className="text-xl font-semibold text-stone-900 dark:text-white">Detaylı İlerleme Raporu</h2>
@@ -1610,13 +1773,13 @@ function ProgressReportModal({
           {/* Overall Progress */}
           <div className="space-y-4">
             <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100 uppercase tracking-wider flex items-center gap-2">
-              <div className="w-1 h-4 bg-rose-500 rounded-full" />
+              <div className="w-1 h-4 bg-accent-500 rounded-full" />
               Genel Durum
             </h3>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="p-4 bg-rose-50/50 dark:bg-rose-900/10 rounded-2xl border border-rose-100/50 dark:border-rose-900/20">
-                <div className="text-xs text-rose-600 dark:text-rose-400 font-medium mb-1">Tamamlanma Oranı</div>
-                <div className="text-3xl font-bold text-rose-700 dark:text-rose-300">%{stats.completionRate}</div>
+              <div className="p-4 bg-accent-50/50 dark:bg-accent-900/10 rounded-2xl border border-accent-100/50 dark:border-accent-900/20">
+                <div className="text-xs text-accent-600 dark:text-accent-400 font-medium mb-1">Tamamlanma Oranı</div>
+                <div className="text-3xl font-bold text-accent-700 dark:text-accent-300">%{stats.completionRate}</div>
               </div>
               <div className="p-4 bg-stone-50 dark:bg-stone-800/50 rounded-2xl border border-stone-100 dark:border-stone-800">
                 <div className="text-xs text-stone-500 dark:text-stone-400 font-medium mb-1">Alınan Ürünler</div>
@@ -1939,7 +2102,7 @@ function ItemModal({
               required
               value={name}
               onChange={e => setName(e.target.value)}
-              className="w-full px-3 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 dark:text-stone-200 transition-all"
+              className="w-full px-3 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 dark:text-stone-200 transition-all"
               placeholder="Örn: Yemek Takımı"
             />
           </div>
@@ -1948,7 +2111,7 @@ function ItemModal({
             <select 
               value={category}
               onChange={e => setCategory(e.target.value as Category)}
-              className="w-full px-3 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 dark:text-stone-200 transition-all"
+              className="w-full px-3 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 dark:text-stone-200 transition-all"
             >
               {categories.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
@@ -1962,7 +2125,7 @@ function ItemModal({
               step="0.01"
               value={price}
               onChange={e => setPrice(e.target.value)}
-              className="w-full px-3 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 dark:text-stone-200 transition-all"
+              className="w-full px-3 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 dark:text-stone-200 transition-all"
               placeholder="0.00"
             />
           </div>
@@ -1972,7 +2135,7 @@ function ItemModal({
               type="url" 
               value={link}
               onChange={e => setLink(e.target.value)}
-              className="w-full px-3 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 dark:text-stone-200 transition-all"
+              className="w-full px-3 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 dark:text-stone-200 transition-all"
               placeholder="https://..."
             />
           </div>
@@ -1981,7 +2144,7 @@ function ItemModal({
             <textarea 
               value={notes}
               onChange={e => setNotes(e.target.value)}
-              className="w-full px-3 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 dark:text-stone-200 transition-all resize-none"
+              className="w-full px-3 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 dark:text-stone-200 transition-all resize-none"
               placeholder="Marka, model, renk vb. detaylar..."
               rows={2}
             />
@@ -2132,7 +2295,7 @@ function BudgetModal({
       >
         <div className="px-6 py-4 border-b border-stone-100 dark:border-stone-800 flex justify-between items-center">
           <h2 className="text-lg font-semibold text-stone-900 dark:text-stone-100 flex items-center gap-2">
-            <Wallet size={20} className="text-rose-500" />
+            <Wallet size={20} className="text-accent-500" />
             Ayarlar & Bütçe
           </h2>
           <button onClick={onClose} className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 p-1">
@@ -2150,7 +2313,7 @@ function BudgetModal({
                 step="100"
                 value={budget}
                 onChange={e => setBudget(e.target.value)}
-                className="w-full px-3 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-all text-lg font-medium dark:text-stone-100"
+                className="w-full px-3 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all text-lg font-medium dark:text-stone-100"
                 placeholder="0.00"
               />
             </div>
