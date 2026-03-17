@@ -9,6 +9,7 @@ export interface Item {
   notes?: string;
   image?: string;
   link?: string;
+  createdAt?: number;
 }
 
 export interface Budget {

@@ -29,9 +29,94 @@ import {
   Folder,
   Tag,
   Link as LinkIcon,
-  FileText
+  FileText,
+  Sun,
+  Moon,
+  ArrowUpDown,
+  Clock,
+  Sparkles,
+  Wand2,
+  Loader2,
+  BrainCircuit,
+  Download,
+  Upload,
+  FileJson,
+  FileSpreadsheet,
+  LayoutGrid,
+  List
 } from 'lucide-react';
+import { GoogleGenAI, Type } from "@google/genai";
 import { Item, Category, CATEGORIES, INITIAL_ITEMS } from './types';
+import { 
+  auth, 
+  db, 
+  googleProvider, 
+  signInWithPopup, 
+  signOut, 
+  onAuthStateChanged,
+  doc, 
+  collection, 
+  onSnapshot, 
+  setDoc, 
+  deleteDoc, 
+  getDoc, 
+  getDocs, 
+  writeBatch, 
+  query, 
+  orderBy,
+  getDocFromServer
+} from './firebase';
+
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId: string | undefined;
+    email: string | null | undefined;
+    emailVerified: boolean | undefined;
+    isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
+  }
+}
+
+const handleFirestoreError = (error: unknown, operationType: OperationType, path: string | null) => {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+};
 
 const getCategoryIcon = (category: string) => {
   const CATEGORY_ICONS: Record<string, React.ReactNode> = {
@@ -45,6 +130,32 @@ const getCategoryIcon = (category: string) => {
     'Diğer': <Package size={16} />,
   };
   return CATEGORY_ICONS[category] || <Folder size={16} />;
+};
+
+const getCategoryColor = (category: string) => {
+  const COLORS: Record<string, string> = {
+    'Mutfak': 'text-rose-500',
+    'Yatak Odası': 'text-blue-500',
+    'Banyo': 'text-cyan-500',
+    'Elektronik': 'text-amber-500',
+    'Salon': 'text-emerald-500',
+    'Dekorasyon': 'text-purple-500',
+    'Diğer': 'text-stone-500',
+  };
+  return COLORS[category] || 'text-indigo-500';
+};
+
+const getCategoryBgColor = (category: string) => {
+  const BG_COLORS: Record<string, string> = {
+    'Mutfak': 'bg-rose-50 dark:bg-rose-900/20 border-rose-100 dark:border-rose-900/30 text-rose-700 dark:text-rose-300',
+    'Yatak Odası': 'bg-blue-50 dark:bg-blue-900/20 border-blue-100 dark:border-blue-900/30 text-blue-700 dark:text-blue-300',
+    'Banyo': 'bg-cyan-50 dark:bg-cyan-900/20 border-cyan-100 dark:border-cyan-900/30 text-cyan-700 dark:text-cyan-300',
+    'Elektronik': 'bg-amber-50 dark:bg-amber-900/20 border-amber-100 dark:border-amber-900/30 text-amber-700 dark:text-amber-300',
+    'Salon': 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-100 dark:border-emerald-900/30 text-emerald-700 dark:text-emerald-300',
+    'Dekorasyon': 'bg-purple-50 dark:bg-purple-900/20 border-purple-100 dark:border-purple-900/30 text-purple-700 dark:text-purple-300',
+    'Diğer': 'bg-stone-50 dark:bg-stone-900/20 border-stone-100 dark:border-stone-900/30 text-stone-700 dark:text-stone-300',
+  };
+  return BG_COLORS[category] || 'bg-indigo-50 dark:bg-indigo-900/20 border-indigo-100 dark:border-indigo-900/30 text-indigo-700 dark:text-indigo-300';
 };
 
 export default function App() {
@@ -82,12 +193,131 @@ export default function App() {
   const [isManageCategoriesModalOpen, setIsManageCategoriesModalOpen] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<Item | null>(null);
-  const [activeCategory, setActiveCategory] = useState<Category | 'Tümü'>('Tümü');
+  const [activeCategory, setActiveCategory] = useState<Category | 'Tümü'>(() => {
+    const saved = localStorage.getItem('ceyiz_active_category');
+    return (saved as Category | 'Tümü') || 'Tümü';
+  });
   const [searchQuery, setSearchQuery] = useState('');
   const [toast, setToast] = useState<{ id: string, message: string, itemId: string } | null>(null);
   const [expandedItemId, setExpandedItemId] = useState<string | null>(null);
-  const [isGroupedByCategory, setIsGroupedByCategory] = useState(false);
+  const [isGroupedByCategory, setIsGroupedByCategory] = useState(() => {
+    const saved = localStorage.getItem('ceyiz_grouped');
+    return saved === 'true';
+  });
+  const [sortBy, setSortBy] = useState<'date-newest' | 'date-oldest' | 'price-asc' | 'price-desc'>('date-newest');
+  const [filterStatus, setFilterStatus] = useState<'all' | 'bought' | 'remaining'>('all');
+  const [isAISuggestionsModalOpen, setIsAISuggestionsModalOpen] = useState(false);
+  const [aiSuggestions, setAiSuggestions] = useState<{ name: string, category: string, reason: string }[]>([]);
+  const [isAILoading, setIsAILoading] = useState(false);
   const [viewingItemsType, setViewingItemsType] = useState<'bought' | 'remaining' | null>(null);
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    const saved = localStorage.getItem('ceyiz_theme');
+    return (saved as 'light' | 'dark') || 'dark';
+  });
+
+  const [user, setUser] = useState<any>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
+  const [backups, setBackups] = useState<any[]>([]);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [isProgressReportModalOpen, setIsProgressReportModalOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<'list' | 'grid'>(() => {
+    const saved = localStorage.getItem('ceyiz_view_mode');
+    return (saved as 'list' | 'grid') || 'list';
+  });
+
+  // Auth Listener
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setIsAuthReady(true);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Firestore Sync - Fetch
+  useEffect(() => {
+    if (!isAuthReady || !user) return;
+
+    const itemsRef = collection(db, `users/${user.uid}/items`);
+    const settingsRef = doc(db, `users/${user.uid}/settings/current`);
+
+    const unsubscribeItems = onSnapshot(itemsRef, (snapshot) => {
+      const firestoreItems = snapshot.docs.map(doc => doc.data() as Item);
+      if (firestoreItems.length > 0) {
+        setItems(firestoreItems);
+      }
+    }, (error) => handleFirestoreError(error, OperationType.GET, `users/${user.uid}/items`));
+
+    const unsubscribeSettings = onSnapshot(settingsRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        if (data.budget) setBudget(data.budget);
+        if (data.categories) setCategories(data.categories);
+        if (data.theme) setTheme(data.theme);
+        if (data.viewMode) setViewMode(data.viewMode);
+      }
+    }, (error) => handleFirestoreError(error, OperationType.GET, `users/${user.uid}/settings/current`));
+
+    // Fetch backups
+    const backupsRef = query(collection(db, `users/${user.uid}/backups`), orderBy('timestamp', 'desc'));
+    const unsubscribeBackups = onSnapshot(backupsRef, (snapshot) => {
+      setBackups(snapshot.docs.map(doc => doc.data()));
+    }, (error) => handleFirestoreError(error, OperationType.GET, `users/${user.uid}/backups`));
+
+    return () => {
+      unsubscribeItems();
+      unsubscribeSettings();
+      unsubscribeBackups();
+    };
+  }, [isAuthReady, user]);
+
+  // Firestore Sync - Push (Debounced or on change)
+  useEffect(() => {
+    if (!user || !isAuthReady || isSyncing) return;
+
+    const syncData = async () => {
+      setIsSyncing(true);
+      try {
+        const batch = writeBatch(db);
+        
+        // Sync Items
+        // Note: For efficiency in a real app, we'd only sync changes.
+        // Here we'll do a simple approach: update/set all items.
+        for (const item of items) {
+          const itemRef = doc(db, `users/${user.uid}/items`, item.id);
+          batch.set(itemRef, item);
+        }
+
+        // Sync Settings
+        const settingsRef = doc(db, `users/${user.uid}/settings/current`);
+        batch.set(settingsRef, {
+          budget,
+          categories,
+          theme,
+          viewMode
+        });
+
+        await batch.commit();
+      } catch (error) {
+        console.error("Sync Error:", error);
+      } finally {
+        setIsSyncing(false);
+      }
+    };
+
+    const timer = setTimeout(syncData, 2000); // Sync after 2s of inactivity
+    return () => clearTimeout(timer);
+  }, [items, budget, categories, theme, user, isAuthReady]);
+
+  useEffect(() => {
+    localStorage.setItem('ceyiz_theme', theme);
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [theme]);
 
   useEffect(() => {
     if (toast) {
@@ -108,6 +338,174 @@ export default function App() {
     localStorage.setItem('ceyiz_categories_v2', JSON.stringify(categories));
   }, [categories]);
 
+  useEffect(() => {
+    localStorage.setItem('ceyiz_active_category', activeCategory);
+  }, [activeCategory]);
+
+  useEffect(() => {
+    localStorage.setItem('ceyiz_grouped', isGroupedByCategory.toString());
+  }, [isGroupedByCategory]);
+
+  useEffect(() => {
+    localStorage.setItem('ceyiz_view_mode', viewMode);
+  }, [viewMode]);
+
+  useEffect(() => {
+    const needsMigration = items.some(item => !item.createdAt);
+    if (needsMigration) {
+      setItems(prev => prev.map(item => ({
+        ...item,
+        createdAt: item.createdAt || Date.now()
+      })));
+    }
+  }, []);
+
+  const handleGetAISuggestions = async () => {
+    if (isAILoading) return;
+    setIsAILoading(true);
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+      const model = "gemini-3-flash-preview";
+      
+      const currentItemsList = items.map(i => `${i.name} (${i.category})`).join(", ");
+      const prompt = `Sen bir çeyiz danışmanısın. Kullanıcının mevcut çeyiz listesi şudur: ${currentItemsList}. 
+      Bu listeyi analiz et ve eksik olabilecek, evlilik hazırlığında mutlaka olması gereken 5 farklı ürün öner. 
+      Önerilerin mevcut listede olmamalıdır. Her öneri için bir isim, uygun bir kategori (${CATEGORIES.join(", ")}) ve neden önerdiğine dair kısa bir açıklama (Türkçe) ver.`;
+
+      const response = await ai.models.generateContent({
+        model,
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                name: { type: Type.STRING },
+                category: { type: Type.STRING },
+                reason: { type: Type.STRING }
+              },
+              required: ["name", "category", "reason"]
+            }
+          }
+        }
+      });
+
+      if (response.text) {
+        const suggestions = JSON.parse(response.text);
+        setAiSuggestions(suggestions);
+      }
+    } catch (error) {
+      console.error("AI Error:", error);
+    } finally {
+      setIsAILoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isAISuggestionsModalOpen && aiSuggestions.length === 0) {
+      handleGetAISuggestions();
+    }
+  }, [isAISuggestionsModalOpen]);
+
+  const handleAddSuggestedItem = (suggestion: { name: string, category: string }) => {
+    const newItem = {
+      name: suggestion.name,
+      category: suggestion.category,
+      price: 0,
+      isBought: false,
+      id: crypto.randomUUID(),
+      createdAt: Date.now()
+    };
+    setItems(prev => [...prev, newItem]);
+    setAiSuggestions(prev => prev.filter(s => s.name !== suggestion.name));
+    setToast({ 
+      id: Date.now().toString(), 
+      message: `${suggestion.name} listeye eklendi!`, 
+      itemId: newItem.id 
+    });
+  };
+
+  const handleImportData = (data: { items: Item[], budget: number, categories: Category[] }) => {
+    if (data.items) setItems(data.items);
+    if (data.budget) setBudget(data.budget);
+    if (data.categories) setCategories(data.categories);
+    setToast({ id: Date.now().toString(), message: 'Veriler başarıyla içe aktarıldı!', itemId: '' });
+  };
+
+  const handleClearBoughtItems = () => {
+    setItems(prev => prev.map(item => ({ ...item, isBought: false })));
+    setToast({ id: Date.now().toString(), message: 'Tüm işaretli ürünler temizlendi!', itemId: '' });
+  };
+
+  const handleResetAll = () => {
+    localStorage.clear();
+    setItems(INITIAL_ITEMS);
+    setBudget(200000);
+    setCategories(CATEGORIES);
+    setTheme('dark');
+    setActiveCategory('Tümü');
+    setIsGroupedByCategory(false);
+    if (user) {
+      // Also clear Firestore if user wants? For now just local reset.
+    }
+  };
+
+  const handleLogin = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+      setToast({ id: Date.now().toString(), message: 'Giriş yapıldı!', itemId: '' });
+    } catch (error) {
+      console.error("Login Error:", error);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      setToast({ id: Date.now().toString(), message: 'Çıkış yapıldı!', itemId: '' });
+    } catch (error) {
+      console.error("Logout Error:", error);
+    }
+  };
+
+  const handleCreateBackup = async () => {
+    if (!user) return;
+    const backupId = crypto.randomUUID();
+    const backup = {
+      id: backupId,
+      timestamp: Date.now(),
+      items,
+      budget,
+      categories
+    };
+    try {
+      await setDoc(doc(db, `users/${user.uid}/backups`, backupId), backup);
+      setToast({ id: Date.now().toString(), message: 'Yedek oluşturuldu!', itemId: '' });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `users/${user.uid}/backups/${backupId}`);
+    }
+  };
+
+  const handleRestoreBackup = (backup: any) => {
+    setItems(backup.items);
+    setBudget(backup.budget);
+    setCategories(backup.categories);
+    setIsBackupModalOpen(false);
+    setToast({ id: Date.now().toString(), message: 'Yedek geri yüklendi!', itemId: '' });
+  };
+
+  const handleDeleteBackup = async (backupId: string) => {
+    if (!user) return;
+    try {
+      await deleteDoc(doc(db, `users/${user.uid}/backups`, backupId));
+      setToast({ id: Date.now().toString(), message: 'Yedek silindi!', itemId: '' });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `users/${user.uid}/backups/${backupId}`);
+    }
+  };
+
   const stats = useMemo(() => {
     const totalItems = items.length;
     const boughtItems = items.filter(i => i.isBought).length;
@@ -122,11 +520,29 @@ export default function App() {
     return { totalItems, boughtItems, remainingItems, totalSpent, estimatedRemaining, remainingBudget, completionRate };
   }, [items, budget]);
 
+  const categoryStats = useMemo(() => {
+    return categories.map(category => {
+      const categoryItems = items.filter(item => item.category === category);
+      const total = categoryItems.length;
+      const bought = categoryItems.filter(item => item.isBought).length;
+      const percentage = total === 0 ? 0 : Math.round((bought / total) * 100);
+      return { category, total, bought, percentage };
+    });
+  }, [items, categories]);
+
   const filteredItems = useMemo(() => {
-    let result = items;
+    let result = [...items];
+    
     if (activeCategory !== 'Tümü') {
       result = result.filter(item => item.category === activeCategory);
     }
+
+    if (filterStatus === 'bought') {
+      result = result.filter(item => item.isBought);
+    } else if (filterStatus === 'remaining') {
+      result = result.filter(item => !item.isBought);
+    }
+
     if (searchQuery.trim() !== '') {
       const lowerQuery = searchQuery.toLowerCase();
       result = result.filter(item => 
@@ -134,8 +550,24 @@ export default function App() {
         (item.notes && item.notes.toLowerCase().includes(lowerQuery))
       );
     }
+
+    result.sort((a, b) => {
+      switch (sortBy) {
+        case 'price-asc':
+          return a.price - b.price;
+        case 'price-desc':
+          return b.price - a.price;
+        case 'date-newest':
+          return (b.createdAt || 0) - (a.createdAt || 0);
+        case 'date-oldest':
+          return (a.createdAt || 0) - (b.createdAt || 0);
+        default:
+          return 0;
+      }
+    });
+
     return result;
-  }, [items, activeCategory, searchQuery]);
+  }, [items, activeCategory, searchQuery, sortBy, filterStatus]);
 
   const groupedItems = useMemo(() => {
     if (!isGroupedByCategory) return null;
@@ -147,149 +579,223 @@ export default function App() {
     return groups;
   }, [filteredItems, isGroupedByCategory]);
 
-  const renderItem = (item: Item) => (
-    <motion.li 
-      key={item.id}
-      layout
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, scale: 0.95 }}
-      className={`group relative flex flex-col p-4 hover:bg-stone-50 transition-colors first:rounded-t-2xl last:rounded-b-2xl ${item.isBought ? 'bg-stone-50/50' : ''}`}
-    >
-      <div className="flex items-center gap-4 w-full">
-        <button 
-          onClick={() => toggleItemStatus(item.id)}
-          className={`flex-shrink-0 transition-colors ${item.isBought ? 'text-emerald-500' : 'text-stone-300 hover:text-stone-400'}`}
+  const renderItem = (item: Item) => {
+    if (viewMode === 'grid') {
+      return (
+        <motion.div
+          key={item.id}
+          layout
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 0.9 }}
+          className={`group relative bg-white dark:bg-stone-900 rounded-2xl border border-stone-200 dark:border-stone-800 overflow-hidden hover:shadow-md transition-all ${item.isBought ? 'opacity-75' : ''}`}
         >
-          {item.isBought ? <CheckCircle2 size={24} /> : <Circle size={24} />}
-        </button>
-        
-        {item.image ? (
-          <img src={item.image} alt={item.name} className="w-12 h-12 rounded-lg object-cover border border-stone-200 flex-shrink-0" referrerPolicy="no-referrer" />
-        ) : (
-          <div className="w-12 h-12 rounded-lg bg-stone-100 border border-stone-200 flex items-center justify-center flex-shrink-0 text-stone-400">
-            <ImageIcon size={20} />
-          </div>
-        )}
-        
-        <div 
-          className="flex-1 min-w-0 cursor-pointer"
-          onClick={() => setExpandedItemId(prev => prev === item.id ? null : item.id)}
-        >
-          <div className="flex items-center gap-2">
-            <p className={`text-sm font-medium truncate ${item.isBought ? 'text-stone-500 line-through' : 'text-stone-900'}`}>
-              {item.name}
-            </p>
-            {item.link && (
-              <a 
-                href={item.link} 
-                target="_blank" 
-                rel="noopener noreferrer"
-                onClick={(e) => e.stopPropagation()}
-                className="text-blue-500 hover:text-blue-600 transition-colors"
-                title="Ürün Linkine Git"
+          <div className="aspect-square relative overflow-hidden bg-stone-100 dark:bg-stone-800">
+            {item.image ? (
+              <img src={item.image} alt={item.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center text-stone-300 dark:text-stone-700">
+                <ImageIcon size={48} />
+              </div>
+            )}
+            <button 
+              onClick={() => toggleItemStatus(item.id)}
+              className={`absolute top-3 left-3 w-8 h-8 rounded-full flex items-center justify-center backdrop-blur-md transition-all ${
+                item.isBought 
+                  ? 'bg-emerald-500 text-white' 
+                  : 'bg-white/80 dark:bg-stone-900/80 text-stone-400 hover:text-emerald-500 shadow-sm'
+              }`}
+            >
+              {item.isBought ? <CheckCircle2 size={20} /> : <Circle size={20} />}
+            </button>
+            <div className="absolute top-3 right-3 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button 
+                onClick={() => setEditingItem(item)}
+                className="w-8 h-8 rounded-full bg-white/80 dark:bg-stone-900/80 backdrop-blur-md flex items-center justify-center text-stone-600 dark:text-stone-400 hover:text-blue-500 shadow-sm"
               >
-                <LinkIcon size={14} />
-              </a>
-            )}
-            {item.notes && (
-              <Info size={14} className="text-stone-400" />
-            )}
-          </div>
-          <div className="flex items-center gap-2 mt-1">
-            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-medium bg-stone-100 text-stone-600">
-              {React.cloneElement(getCategoryIcon(item.category) as React.ReactElement, { size: 12 })}
-              {item.category}
-            </span>
-            <span className={`text-xs font-medium ${item.isBought ? 'text-stone-400' : 'text-stone-600'}`}>
-              {formatCurrency(item.price)}
-            </span>
-          </div>
-        </div>
-
-        <div className={`flex items-center gap-2 transition-opacity ${expandedItemId === item.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
-          <button 
-            onClick={() => setEditingItem(item)}
-            className="p-2 text-stone-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-          >
-            <Edit2 size={16} />
-          </button>
-          <button 
-            onClick={() => handleDeleteItem(item.id)}
-            className="p-2 text-stone-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-          >
-            <Trash2 size={16} />
-          </button>
-          <button 
-            onClick={() => setExpandedItemId(prev => prev === item.id ? null : item.id)}
-            className={`p-2 rounded-lg transition-colors ${expandedItemId === item.id ? 'text-stone-900 bg-stone-100' : 'text-stone-400 hover:text-stone-600 hover:bg-stone-100'}`}
-          >
-            <ChevronDown size={16} className={`transition-transform ${expandedItemId === item.id ? 'rotate-180' : ''}`} />
-          </button>
-        </div>
-      </div>
-
-      {/* Expanded Content */}
-      <AnimatePresence>
-        {expandedItemId === item.id && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            className="overflow-hidden w-full"
-          >
-            <div className="pt-4 mt-4 border-t border-stone-100 grid grid-cols-1 sm:grid-cols-2 gap-6 pl-[3.25rem]">
-              <div>
-                <h4 className="text-xs font-semibold text-stone-900 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                  <Info size={14} className="text-stone-400" />
-                  Ürün Bilgisi
-                </h4>
-                <div className="space-y-3">
-                  {item.link && (
-                    <a 
-                      href={item.link}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-2 text-sm text-blue-600 hover:text-blue-700 font-medium"
-                    >
-                      <LinkIcon size={14} />
-                      Ürün Linkine Git
-                    </a>
-                  )}
-                  <p className="text-sm text-stone-600 bg-stone-50 p-3 rounded-xl border border-stone-100">
-                    {item.notes || 'Bu ürün için henüz not eklenmemiş.'}
-                  </p>
-                </div>
-              </div>
-              <div>
-                <h4 className="text-xs font-semibold text-stone-900 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                  <Search size={14} className="text-stone-400" />
-                  Fiyat Araştır
-                </h4>
-                <div className="flex flex-wrap gap-2">
-                  <a href={`https://www.trendyol.com/sr?q=${encodeURIComponent(item.name)}`} target="_blank" rel="noopener noreferrer" className="px-3 py-2 bg-white border border-stone-200 text-stone-700 text-xs font-medium rounded-xl hover:border-[#F27A1A] hover:text-[#F27A1A] transition-colors flex items-center gap-1.5 shadow-sm">
-                    Trendyol <ExternalLink size={12} />
-                  </a>
-                  <a href={`https://www.hepsiburada.com/ara?q=${encodeURIComponent(item.name)}`} target="_blank" rel="noopener noreferrer" className="px-3 py-2 bg-white border border-stone-200 text-stone-700 text-xs font-medium rounded-xl hover:border-[#FF6000] hover:text-[#FF6000] transition-colors flex items-center gap-1.5 shadow-sm">
-                    Hepsiburada <ExternalLink size={12} />
-                  </a>
-                  <a href={`https://www.amazon.com.tr/s?k=${encodeURIComponent(item.name)}`} target="_blank" rel="noopener noreferrer" className="px-3 py-2 bg-white border border-stone-200 text-stone-700 text-xs font-medium rounded-xl hover:border-[#232F3E] hover:text-[#232F3E] transition-colors flex items-center gap-1.5 shadow-sm">
-                    Amazon <ExternalLink size={12} />
-                  </a>
-                  <a href={`https://www.n11.com/arama?q=${encodeURIComponent(item.name)}`} target="_blank" rel="noopener noreferrer" className="px-3 py-2 bg-white border border-stone-200 text-stone-700 text-xs font-medium rounded-xl hover:border-[#5C3EBC] hover:text-[#5C3EBC] transition-colors flex items-center gap-1.5 shadow-sm">
-                    N11 <ExternalLink size={12} />
-                  </a>
-                </div>
-              </div>
+                <Edit2 size={16} />
+              </button>
+              <button 
+                onClick={() => handleDeleteItem(item.id)}
+                className="w-8 h-8 rounded-full bg-white/80 dark:bg-stone-900/80 backdrop-blur-md flex items-center justify-center text-stone-600 dark:text-stone-400 hover:text-rose-500 shadow-sm"
+              >
+                <Trash2 size={16} />
+              </button>
             </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </motion.li>
-  );
+          </div>
+          <div className="p-4">
+            <div className="flex items-start justify-between gap-2 mb-2">
+              <h3 className={`text-sm font-semibold line-clamp-2 ${item.isBought ? 'text-stone-500 line-through' : 'text-stone-900 dark:text-stone-100'}`}>
+                {item.name}
+              </h3>
+              {item.link && (
+                <a 
+                  href={item.link} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="text-blue-500 hover:text-blue-600 transition-colors shrink-0"
+                >
+                  <ExternalLink size={14} />
+                </a>
+              )}
+            </div>
+            <div className="flex items-center justify-between mt-auto">
+              <span className={`text-xs font-bold ${item.isBought ? 'text-stone-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                {formatCurrency(item.price)}
+              </span>
+              <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${getCategoryBgColor(item.category)}`}>
+                {item.category}
+              </span>
+            </div>
+          </div>
+        </motion.div>
+      );
+    }
 
-  const handleAddItem = (item: Omit<Item, 'id'>) => {
-    const newItem = { ...item, id: crypto.randomUUID() };
+    return (
+      <motion.li 
+        key={item.id}
+        layout
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className={`group relative flex flex-col p-4 hover:bg-stone-50 dark:hover:bg-stone-800/50 transition-colors first:rounded-t-2xl last:rounded-b-2xl ${item.isBought ? 'bg-stone-50/50 dark:bg-stone-800/30' : ''}`}
+      >
+        <div className="flex items-center gap-4 w-full">
+          <button 
+            onClick={() => toggleItemStatus(item.id)}
+            className={`flex-shrink-0 transition-colors ${item.isBought ? 'text-emerald-500' : 'text-stone-300 dark:text-stone-700 hover:text-stone-400 dark:hover:text-stone-600'}`}
+          >
+            {item.isBought ? <CheckCircle2 size={24} /> : <Circle size={24} />}
+          </button>
+          
+          {item.image ? (
+            <img src={item.image} alt={item.name} className="w-12 h-12 rounded-lg object-cover border border-stone-200 dark:border-stone-800 flex-shrink-0" referrerPolicy="no-referrer" />
+          ) : (
+            <div className="w-12 h-12 rounded-lg bg-stone-100 dark:bg-stone-800 border border-stone-200 dark:border-stone-800 flex items-center justify-center flex-shrink-0 text-stone-400 dark:text-stone-600">
+              <ImageIcon size={20} />
+            </div>
+          )}
+          
+          <div 
+            className="flex-1 min-w-0 cursor-pointer"
+            onClick={() => setExpandedItemId(prev => prev === item.id ? null : item.id)}
+          >
+            <div className="flex items-center gap-2">
+              <p className={`text-sm font-medium truncate ${item.isBought ? 'text-stone-500 dark:text-stone-500 line-through' : 'text-stone-900 dark:text-stone-100'}`}>
+                {item.name}
+              </p>
+              {item.link && (
+                <a 
+                  href={item.link} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="text-blue-500 dark:text-blue-400 hover:text-blue-600 dark:hover:text-blue-300 transition-colors"
+                  title="Ürün Linkine Git"
+                >
+                  <LinkIcon size={14} />
+                </a>
+              )}
+              {item.notes && (
+                <Info size={14} className="text-stone-400 dark:text-stone-600" />
+              )}
+            </div>
+            <div className="flex items-center gap-2 mt-1">
+              <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-medium ${getCategoryBgColor(item.category)}`}>
+                {React.cloneElement(getCategoryIcon(item.category) as React.ReactElement, { size: 12 })}
+                {item.category}
+              </span>
+              <span className={`text-xs font-medium ${item.isBought ? 'text-stone-400 dark:text-stone-600' : 'text-stone-600 dark:text-stone-400'}`}>
+                {formatCurrency(item.price)}
+              </span>
+            </div>
+          </div>
+
+          <div className={`flex items-center gap-2 transition-opacity ${expandedItemId === item.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+            <button 
+              onClick={() => setEditingItem(item)}
+              className="p-2 text-stone-400 dark:text-stone-600 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
+            >
+              <Edit2 size={16} />
+            </button>
+            <button 
+              onClick={() => handleDeleteItem(item.id)}
+              className="p-2 text-stone-400 dark:text-stone-600 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/30 rounded-lg transition-colors"
+            >
+              <Trash2 size={16} />
+            </button>
+            <button 
+              onClick={() => setExpandedItemId(prev => prev === item.id ? null : item.id)}
+              className={`p-2 rounded-lg transition-colors ${expandedItemId === item.id ? 'text-stone-900 dark:text-stone-100 bg-stone-100 dark:bg-stone-800' : 'text-stone-400 dark:text-stone-600 hover:text-stone-600 dark:hover:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800'}`}
+            >
+              <ChevronDown size={16} className={`transition-transform ${expandedItemId === item.id ? 'rotate-180' : ''}`} />
+            </button>
+          </div>
+        </div>
+
+        {/* Expanded Content */}
+        <AnimatePresence>
+          {expandedItemId === item.id && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              className="overflow-hidden w-full"
+            >
+              <div className="pt-4 mt-4 border-t border-stone-100 dark:border-stone-800 grid grid-cols-1 sm:grid-cols-2 gap-6 pl-[3.25rem]">
+                <div>
+                  <h4 className="text-xs font-semibold text-stone-900 dark:text-stone-100 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                    <Info size={14} className="text-stone-400 dark:text-stone-600" />
+                    Ürün Bilgisi
+                  </h4>
+                  <div className="space-y-3">
+                    {item.link && (
+                      <a 
+                        href={item.link}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-2 text-sm text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 font-medium"
+                      >
+                        <LinkIcon size={14} />
+                        Ürün Linkine Git
+                      </a>
+                    )}
+                    <p className="text-sm text-stone-600 dark:text-stone-400 bg-stone-50 dark:bg-stone-800/50 p-3 rounded-xl border border-stone-100 dark:border-stone-800">
+                      {item.notes || 'Bu ürün için henüz not eklenmemiş.'}
+                    </p>
+                  </div>
+                </div>
+                <div>
+                  <h4 className="text-xs font-semibold text-stone-900 dark:text-stone-100 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                    <Search size={14} className="text-stone-400 dark:text-stone-600" />
+                    Fiyat Araştır
+                  </h4>
+                  <div className="flex flex-wrap gap-2">
+                    <a href={`https://www.trendyol.com/sr?q=${encodeURIComponent(item.name)}`} target="_blank" rel="noopener noreferrer" className="px-3 py-2 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 text-stone-700 dark:text-stone-300 text-xs font-medium rounded-xl hover:border-[#F27A1A] hover:text-[#F27A1A] transition-colors flex items-center gap-1.5 shadow-sm">
+                      Trendyol <ExternalLink size={12} />
+                    </a>
+                    <a href={`https://www.hepsiburada.com/ara?q=${encodeURIComponent(item.name)}`} target="_blank" rel="noopener noreferrer" className="px-3 py-2 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 text-stone-700 dark:text-stone-300 text-xs font-medium rounded-xl hover:border-[#FF6000] hover:text-[#FF6000] transition-colors flex items-center gap-1.5 shadow-sm">
+                      Hepsiburada <ExternalLink size={12} />
+                    </a>
+                    <a href={`https://www.amazon.com.tr/s?k=${encodeURIComponent(item.name)}`} target="_blank" rel="noopener noreferrer" className="px-3 py-2 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 text-stone-700 dark:text-stone-300 text-xs font-medium rounded-xl hover:border-[#232F3E] hover:text-[#232F3E] transition-colors flex items-center gap-1.5 shadow-sm">
+                      Amazon <ExternalLink size={12} />
+                    </a>
+                    <a href={`https://www.n11.com/arama?q=${encodeURIComponent(item.name)}`} target="_blank" rel="noopener noreferrer" className="px-3 py-2 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 text-stone-700 dark:text-stone-300 text-xs font-medium rounded-xl hover:border-[#5C3EBC] hover:text-[#5C3EBC] transition-colors flex items-center gap-1.5 shadow-sm">
+                      N11 <ExternalLink size={12} />
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </motion.li>
+    );
+  };
+
+  const handleAddItem = (item: Omit<Item, 'id' | 'createdAt'>) => {
+    const newItem = { ...item, id: crypto.randomUUID(), createdAt: Date.now() };
     setItems(prev => [...prev, newItem]);
     setIsAddModalOpen(false);
   };
@@ -331,7 +837,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-stone-50 text-stone-800 font-sans selection:bg-rose-200">
+    <div className="min-h-screen bg-stone-50 dark:bg-stone-950 text-stone-800 dark:text-stone-200 font-sans selection:bg-rose-200 transition-colors duration-300">
       {/* Toast Notification */}
       <AnimatePresence>
         {toast && (
@@ -359,39 +865,128 @@ export default function App() {
       </AnimatePresence>
 
       {/* Header */}
-      <header className="bg-white border-b border-stone-200 sticky top-0 z-10">
+      <header className="bg-white dark:bg-stone-900 border-b border-stone-200 dark:border-stone-800 sticky top-0 z-10 transition-colors">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-rose-100 rounded-lg flex items-center justify-center text-rose-600">
+            <div className="w-8 h-8 bg-rose-100 dark:bg-rose-900/30 rounded-lg flex items-center justify-center text-rose-600 dark:text-rose-400">
               <ShoppingBag size={20} />
             </div>
-            <h1 className="text-xl font-semibold text-stone-900 tracking-tight">Çeyiz Listem</h1>
+            <h1 className="text-xl font-semibold text-stone-900 dark:text-white tracking-tight">Çeyiz Listem</h1>
           </div>
-          <button 
-            onClick={() => setIsBudgetModalOpen(true)}
-            className="flex items-center gap-2 text-sm font-medium text-stone-600 hover:text-stone-900 transition-colors px-3 py-2 rounded-md hover:bg-stone-100"
-          >
-            <Settings size={18} />
-            <span className="hidden sm:inline">Bütçe Ayarları</span>
-          </button>
+          <div className="flex items-center gap-2">
+            {user && (
+              <div className="flex items-center gap-1.5 px-2 py-1 bg-emerald-50 dark:bg-emerald-900/20 rounded-lg border border-emerald-100 dark:border-emerald-900/30">
+                <div className={`w-1.5 h-1.5 rounded-full ${isSyncing ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`} />
+                <span className="text-[10px] font-medium text-emerald-700 dark:text-emerald-300 uppercase tracking-wider">
+                  {isSyncing ? 'Eşitleniyor' : 'Bulutla Eşitlendi'}
+                </span>
+              </div>
+            )}
+            {user ? (
+              <div className="flex items-center gap-2">
+                <img 
+                  src={user.photoURL} 
+                  alt={user.displayName} 
+                  className="w-8 h-8 rounded-full border border-stone-200 dark:border-stone-700"
+                  referrerPolicy="no-referrer"
+                />
+                <button
+                  onClick={handleLogout}
+                  className="text-xs font-medium text-stone-500 hover:text-rose-600 transition-colors"
+                >
+                  Çıkış
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={handleLogin}
+                className="flex items-center gap-2 text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 px-3 py-2 rounded-xl transition-colors"
+              >
+                <Wand2 size={18} />
+                <span>Giriş Yap</span>
+              </button>
+            )}
+            <motion.button
+              whileTap={{ scale: 0.9 }}
+              whileHover={{ scale: 1.05 }}
+              onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+              className="relative p-2 w-10 h-10 flex items-center justify-center rounded-xl bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 transition-colors border border-stone-200 dark:border-stone-700 shadow-sm"
+              title={theme === 'light' ? 'Karanlık Mod' : 'Aydınlık Mod'}
+            >
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.div
+                  key={theme}
+                  initial={{ y: 10, opacity: 0, rotate: -45 }}
+                  animate={{ y: 0, opacity: 1, rotate: 0 }}
+                  exit={{ y: -10, opacity: 0, rotate: 45 }}
+                  transition={{ duration: 0.2, ease: "easeInOut" }}
+                >
+                  {theme === 'light' ? <Moon size={20} /> : <Sun size={20} />}
+                </motion.div>
+              </AnimatePresence>
+            </motion.button>
+            <button 
+              onClick={() => setIsBudgetModalOpen(true)}
+              className="flex items-center gap-2 text-sm font-medium text-stone-600 hover:text-stone-900 dark:text-stone-400 dark:hover:text-stone-100 transition-colors px-3 py-2 rounded-md hover:bg-stone-100 dark:hover:bg-stone-800"
+            >
+              <Settings size={18} />
+              <span className="hidden sm:inline">Bütçe Ayarları</span>
+            </button>
+            {user && (
+              <button 
+                onClick={() => setIsBackupModalOpen(true)}
+                className="flex items-center gap-2 text-sm font-medium text-stone-600 hover:text-stone-900 dark:text-stone-400 dark:hover:text-stone-100 transition-colors px-3 py-2 rounded-md hover:bg-stone-100 dark:hover:bg-stone-800"
+              >
+                <Clock size={18} />
+                <span className="hidden sm:inline">Yedekler</span>
+              </button>
+            )}
+          </div>
         </div>
       </header>
 
       <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+        {isBackupModalOpen && (
+          <BackupModal 
+            onClose={() => setIsBackupModalOpen(false)}
+            backups={backups}
+            onCreate={handleCreateBackup}
+            onRestore={handleRestoreBackup}
+            onDelete={handleDeleteBackup}
+          />
+        )}
+
+        {isProgressReportModalOpen && (
+          <ProgressReportModal 
+            onClose={() => setIsProgressReportModalOpen(false)}
+            stats={stats}
+            categoryStats={categoryStats}
+          />
+        )}
+
         {/* Dashboard Stats */}
         <section>
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-medium text-stone-900 flex items-center gap-2">
+            <h2 className="text-lg font-medium text-stone-900 dark:text-stone-100 flex items-center gap-2">
               <PieChart size={20} className="text-rose-500" />
               Genel Bakış
             </h2>
-            <button 
-              onClick={() => setIsReportModalOpen(true)}
-              className="text-sm font-medium text-rose-600 hover:text-rose-700 flex items-center gap-1.5 px-3 py-1.5 bg-rose-50 rounded-lg transition-colors"
-            >
-              <FileText size={16} />
-              Detaylı Rapor
-            </button>
+            <div className="flex items-center gap-2">
+              <button 
+                onClick={() => setIsAISuggestionsModalOpen(true)}
+                className="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 dark:bg-indigo-900/20 rounded-lg transition-colors"
+              >
+                <Sparkles size={16} />
+                Yapay Zeka Önerileri
+              </button>
+              <button 
+                onClick={() => setIsReportModalOpen(true)}
+                className="text-sm font-medium text-rose-600 hover:text-rose-700 flex items-center gap-1.5 px-3 py-1.5 bg-rose-50 dark:bg-rose-900/20 rounded-lg transition-colors"
+              >
+                <FileText size={16} />
+                Detaylı Rapor
+              </button>
+            </div>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <StatCard title="Toplam Ürün" value={stats.totalItems} subtitle={`${stats.completionRate}% Tamamlandı`} />
@@ -416,12 +1011,20 @@ export default function App() {
           </div>
           
           {/* Progress Bar */}
-          <div className="mt-6 bg-white p-4 rounded-2xl border border-stone-200 shadow-sm">
+          <motion.button 
+            whileHover={{ scale: 1.01 }}
+            whileTap={{ scale: 0.99 }}
+            onClick={() => setIsProgressReportModalOpen(true)}
+            className="mt-6 w-full text-left bg-white dark:bg-stone-900 p-4 rounded-2xl border border-stone-200 dark:border-stone-800 shadow-sm hover:border-rose-300 dark:hover:border-rose-900/50 transition-all group"
+          >
             <div className="flex justify-between text-sm font-medium mb-2">
-              <span className="text-stone-500">İlerleme</span>
-              <span className="text-stone-900">{stats.completionRate}%</span>
+              <div className="flex items-center gap-2">
+                <span className="text-stone-500 dark:text-stone-400">İlerleme</span>
+                <span className="text-[10px] bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 px-2 py-0.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">Detayları Gör</span>
+              </div>
+              <span className="text-stone-900 dark:text-stone-100">{stats.completionRate}%</span>
             </div>
-            <div className="h-3 bg-stone-100 rounded-full overflow-hidden">
+            <div className="h-3 bg-stone-100 dark:bg-stone-800 rounded-full overflow-hidden">
               <motion.div 
                 initial={{ width: 0 }}
                 animate={{ width: `${stats.completionRate}%` }}
@@ -429,13 +1032,13 @@ export default function App() {
                 className="h-full bg-gradient-to-r from-rose-400 to-rose-500 rounded-full"
               />
             </div>
-          </div>
+          </motion.button>
         </section>
 
         {/* Filters and List */}
         <section>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-            <h2 className="text-lg font-medium text-stone-900 flex items-center gap-2">
+            <h2 className="text-lg font-medium text-stone-900 dark:text-stone-100 flex items-center gap-2">
               <TrendingUp size={20} className="text-rose-500" />
               Alışveriş Listesi
             </h2>
@@ -447,12 +1050,12 @@ export default function App() {
                   placeholder="Ürün ara..." 
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 bg-white border border-stone-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-all"
+                  className="w-full pl-10 pr-4 py-2 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 dark:text-stone-200 transition-all"
                 />
               </div>
               <button 
                 onClick={() => setIsAddModalOpen(true)}
-                className="flex items-center justify-center gap-2 bg-stone-900 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-stone-800 transition-colors shadow-sm w-full sm:w-auto whitespace-nowrap"
+                className="flex items-center justify-center gap-2 bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-900 px-4 py-2 rounded-xl text-sm font-medium hover:bg-stone-800 dark:hover:bg-white transition-colors shadow-sm w-full sm:w-auto whitespace-nowrap"
               >
                 <Plus size={18} />
                 Yeni Ürün
@@ -469,17 +1072,19 @@ export default function App() {
                   onClick={() => setActiveCategory(category)}
                   className={`flex items-center gap-2 whitespace-nowrap px-4 py-2 rounded-full text-sm font-medium transition-all ${
                     activeCategory === category 
-                      ? 'bg-rose-100 text-rose-700 shadow-sm ring-1 ring-rose-200' 
-                      : 'bg-white text-stone-600 border border-stone-200 hover:bg-stone-50'
+                      ? `${getCategoryBgColor(category)} shadow-sm ring-1 ring-stone-200 dark:ring-stone-800` 
+                      : 'bg-white dark:bg-stone-900 text-stone-600 dark:text-stone-400 border border-stone-200 dark:border-stone-800 hover:bg-stone-50 dark:hover:bg-stone-800'
                   }`}
                 >
-                  {getCategoryIcon(category)}
+                  <span className={activeCategory === category ? '' : getCategoryColor(category)}>
+                    {getCategoryIcon(category)}
+                  </span>
                   {category}
                 </button>
               ))}
               <button
                 onClick={() => setIsManageCategoriesModalOpen(true)}
-                className="flex items-center gap-2 whitespace-nowrap px-4 py-2 rounded-full text-sm font-medium transition-all bg-white text-stone-600 border border-stone-200 hover:bg-stone-50"
+                className="flex items-center gap-2 whitespace-nowrap px-4 py-2 rounded-full text-sm font-medium transition-all bg-white dark:bg-stone-900 text-stone-600 dark:text-stone-400 border border-stone-200 dark:border-stone-800 hover:bg-stone-50 dark:hover:bg-stone-800"
                 title="Kategorileri Yönet"
               >
                 <Settings size={16} />
@@ -490,49 +1095,100 @@ export default function App() {
               onClick={() => setIsGroupedByCategory(!isGroupedByCategory)}
               className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all whitespace-nowrap ${
                 isGroupedByCategory
-                  ? 'bg-stone-800 text-white shadow-sm'
-                  : 'bg-white text-stone-600 border border-stone-200 hover:bg-stone-50'
+                  ? 'bg-stone-800 dark:bg-stone-100 text-white dark:text-stone-900 shadow-sm'
+                  : 'bg-white dark:bg-stone-900 text-stone-600 dark:text-stone-400 border border-stone-200 dark:border-stone-800 hover:bg-stone-50 dark:hover:bg-stone-800'
               }`}
             >
               <Layers size={16} />
               Kategorilere Göre Grupla
             </button>
+
+            <div className="flex items-center bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-full p-1 shadow-sm">
+              <button
+                onClick={() => setViewMode('list')}
+                className={`p-1.5 rounded-full transition-all ${viewMode === 'list' ? 'bg-stone-100 dark:bg-stone-800 text-rose-500' : 'text-stone-400 hover:text-stone-600'}`}
+                title="Liste Görünümü"
+              >
+                <List size={16} />
+              </button>
+              <button
+                onClick={() => setViewMode('grid')}
+                className={`p-1.5 rounded-full transition-all ${viewMode === 'grid' ? 'bg-stone-100 dark:bg-stone-800 text-rose-500' : 'text-stone-400 hover:text-stone-600'}`}
+                title="Izgara Görünümü"
+              >
+                <LayoutGrid size={16} />
+              </button>
+            </div>
+          </div>
+
+          {/* Sorting and Filtering Controls */}
+          <div className="flex flex-wrap items-center gap-3 mt-4">
+            <div className="flex items-center gap-2 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-xl px-3 py-1.5 shadow-sm">
+              <Filter size={14} className="text-stone-400" />
+              <select 
+                value={filterStatus}
+                onChange={(e) => setFilterStatus(e.target.value as any)}
+                className="bg-transparent text-xs font-medium text-stone-700 dark:text-stone-300 focus:outline-none cursor-pointer"
+              >
+                <option value="all">Tüm Durumlar</option>
+                <option value="bought">Alınanlar</option>
+                <option value="remaining">Alınacaklar</option>
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-xl px-3 py-1.5 shadow-sm">
+              <ArrowUpDown size={14} className="text-stone-400" />
+              <select 
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as any)}
+                className="bg-transparent text-xs font-medium text-stone-700 dark:text-stone-300 focus:outline-none cursor-pointer"
+              >
+                <option value="date-newest">En Yeni (Eklenme)</option>
+                <option value="date-oldest">En Eski (Eklenme)</option>
+                <option value="price-asc">Fiyat (Artan)</option>
+                <option value="price-desc">Fiyat (Azalan)</option>
+              </select>
+            </div>
+            
+            <div className="text-[10px] text-stone-400 dark:text-stone-500 ml-auto">
+              {filteredItems.length} ürün listeleniyor
+            </div>
           </div>
 
           {/* Items List */}
-          <div className="bg-white rounded-2xl border border-stone-200 shadow-sm">
+          <div className={viewMode === 'list' ? "bg-white dark:bg-stone-900 rounded-2xl border border-stone-200 dark:border-stone-800 shadow-sm" : ""}>
             {filteredItems.length === 0 ? (
-              <div className="p-8 text-center text-stone-500">
-                <ShoppingBag size={48} className="mx-auto mb-4 text-stone-300" />
+              <div className="p-8 text-center text-stone-500 dark:text-stone-400 bg-white dark:bg-stone-900 rounded-2xl border border-stone-200 dark:border-stone-800 shadow-sm">
+                <ShoppingBag size={48} className="mx-auto mb-4 text-stone-300 dark:text-stone-700" />
                 <p>Bu kategoride henüz ürün yok.</p>
               </div>
             ) : isGroupedByCategory && groupedItems ? (
-              <div className="p-4 sm:p-6 space-y-8">
+              <div className={`p-4 sm:p-6 space-y-8 ${viewMode === 'grid' ? 'bg-white dark:bg-stone-900 rounded-2xl border border-stone-200 dark:border-stone-800 shadow-sm' : ''}`}>
                 {categories.map(category => {
                   const items = groupedItems[category];
                   if (!items?.length) return null;
                   return (
                     <div key={category} className="space-y-3">
-                      <h3 className="text-sm font-semibold text-stone-900 flex items-center gap-2 px-2">
+                      <h3 className={`text-sm font-semibold flex items-center gap-2 px-3 py-1.5 rounded-lg ${getCategoryBgColor(category)}`}>
                         {React.cloneElement(getCategoryIcon(category) as React.ReactElement, { size: 16 })}
                         {category}
-                        <span className="text-stone-400 font-normal text-xs ml-1">({items.length})</span>
+                        <span className="opacity-60 font-normal text-xs ml-1">({items.length})</span>
                       </h3>
-                      <ul className="divide-y divide-stone-100 border border-stone-100 rounded-2xl overflow-hidden bg-white shadow-sm">
+                      <div className={viewMode === 'grid' ? "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4" : "divide-y divide-stone-100 dark:divide-stone-800 border border-stone-100 dark:border-stone-800 rounded-2xl overflow-hidden bg-white dark:bg-stone-900 shadow-sm"}>
                         <AnimatePresence>
                           {items.map(item => renderItem(item))}
                         </AnimatePresence>
-                      </ul>
+                      </div>
                     </div>
                   );
                 })}
               </div>
             ) : (
-              <ul className="divide-y divide-stone-100">
+              <div className={viewMode === 'grid' ? "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4" : "divide-y divide-stone-100 dark:divide-stone-800"}>
                 <AnimatePresence>
                   {filteredItems.map(item => renderItem(item))}
                 </AnimatePresence>
-              </ul>
+              </div>
             )}
           </div>
         </section>
@@ -560,8 +1216,13 @@ export default function App() {
         {isBudgetModalOpen && (
           <BudgetModal 
             currentBudget={budget}
+            items={items}
+            categories={categories}
             onClose={() => setIsBudgetModalOpen(false)}
             onSubmit={setBudget}
+            onReset={handleResetAll}
+            onImport={handleImportData}
+            onClearBought={handleClearBoughtItems}
           />
         )}
         {isManageCategoriesModalOpen && (
@@ -592,7 +1253,125 @@ export default function App() {
             formatCurrency={formatCurrency}
           />
         )}
+        {isAISuggestionsModalOpen && (
+          <AISuggestionsModal 
+            onClose={() => setIsAISuggestionsModalOpen(false)}
+            suggestions={aiSuggestions}
+            onAdd={handleAddSuggestedItem}
+            isLoading={isAILoading}
+            onRefresh={handleGetAISuggestions}
+          />
+        )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+function AISuggestionsModal({ 
+  onClose, 
+  suggestions, 
+  onAdd, 
+  isLoading,
+  onRefresh
+}: { 
+  onClose: () => void, 
+  suggestions: { name: string, category: string, reason: string }[],
+  onAdd: (s: { name: string, category: string }) => void,
+  isLoading: boolean,
+  onRefresh: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/40 dark:bg-stone-950/60 backdrop-blur-sm">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className="bg-white dark:bg-stone-900 rounded-2xl shadow-xl w-full max-w-lg overflow-hidden border dark:border-stone-800"
+      >
+        <div className="px-6 py-4 border-b border-stone-100 dark:border-stone-800 flex justify-between items-center bg-indigo-50/50 dark:bg-indigo-900/10">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 bg-indigo-100 dark:bg-indigo-900/30 rounded-lg flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+              <BrainCircuit size={20} />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-stone-900 dark:text-stone-100">Yapay Zeka Önerileri</h2>
+              <p className="text-[10px] text-stone-500 dark:text-stone-400">Listeniz analiz edildi ve eksikler belirlendi</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 p-1">
+            <Plus size={24} className="rotate-45" />
+          </button>
+        </div>
+
+        <div className="p-6 max-h-[60vh] overflow-y-auto space-y-4 custom-scrollbar">
+          {isLoading ? (
+            <div className="py-12 flex flex-col items-center justify-center gap-4">
+              <div className="relative">
+                <Loader2 size={40} className="text-indigo-500 animate-spin" />
+                <Sparkles size={16} className="text-amber-400 absolute -top-1 -right-1 animate-pulse" />
+              </div>
+              <div className="text-center">
+                <p className="text-sm font-medium text-stone-900 dark:text-stone-100">Listeniz Analiz Ediliyor...</p>
+                <p className="text-xs text-stone-500 dark:text-stone-400 mt-1">Gemini AI en iyi önerileri hazırlıyor.</p>
+              </div>
+            </div>
+          ) : suggestions.length > 0 ? (
+            <div className="space-y-3">
+              {suggestions.map((suggestion, index) => (
+                <motion.div 
+                  key={index}
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: index * 0.1 }}
+                  className="p-4 bg-stone-50 dark:bg-stone-800/50 rounded-2xl border border-stone-100 dark:border-stone-800 group hover:border-indigo-200 dark:hover:border-indigo-900/30 transition-all"
+                >
+                  <div className="flex justify-between items-start gap-4">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="px-2 py-0.5 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 text-[10px] font-bold rounded-md uppercase tracking-wider">
+                          {suggestion.category}
+                        </span>
+                      </div>
+                      <h3 className="font-semibold text-stone-900 dark:text-stone-100">{suggestion.name}</h3>
+                      <p className="text-xs text-stone-500 dark:text-stone-400 mt-1 leading-relaxed italic">
+                        "{suggestion.reason}"
+                      </p>
+                    </div>
+                    <button 
+                      onClick={() => onAdd(suggestion)}
+                      className="flex-shrink-0 w-10 h-10 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl flex items-center justify-center text-indigo-600 dark:text-indigo-400 hover:bg-indigo-600 hover:text-white hover:border-indigo-600 transition-all shadow-sm group/btn"
+                      title="Listeye Ekle"
+                    >
+                      <Plus size={20} className="group-hover/btn:scale-110 transition-transform" />
+                    </button>
+                  </div>
+                </motion.div>
+              ))}
+            </div>
+          ) : (
+            <div className="py-8 text-center">
+              <p className="text-sm text-stone-500 dark:text-stone-400">Henüz öneri bulunamadı.</p>
+            </div>
+          )}
+        </div>
+
+        <div className="p-6 bg-stone-50 dark:bg-stone-800/30 border-t border-stone-100 dark:border-stone-800 flex gap-3">
+          <button 
+            onClick={onClose}
+            className="flex-1 px-4 py-2.5 border border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-400 rounded-xl font-medium hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors text-sm"
+          >
+            Kapat
+          </button>
+          <button 
+            onClick={onRefresh}
+            disabled={isLoading}
+            className="flex-1 px-4 py-2.5 bg-indigo-600 text-white rounded-xl font-medium hover:bg-indigo-700 disabled:opacity-50 transition-all text-sm flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20"
+          >
+            <Wand2 size={16} className={isLoading ? 'animate-spin' : ''} />
+            Yeniden Analiz Et
+          </button>
+        </div>
+      </motion.div>
     </div>
   );
 }
@@ -675,26 +1454,26 @@ function ManageCategoriesModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/40 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/40 dark:bg-stone-950/60 backdrop-blur-sm">
       <motion.div 
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden flex flex-col max-h-[90vh]"
+        className="bg-white dark:bg-stone-900 rounded-2xl shadow-xl w-full max-w-md overflow-hidden flex flex-col max-h-[90vh] border dark:border-stone-800"
       >
-        <div className="px-6 py-4 border-b border-stone-100 flex justify-between items-center flex-shrink-0">
-          <h2 className="text-lg font-semibold text-stone-900 flex items-center gap-2">
-            <Settings size={20} className="text-stone-500" />
+        <div className="px-6 py-4 border-b border-stone-100 dark:border-stone-800 flex justify-between items-center flex-shrink-0">
+          <h2 className="text-lg font-semibold text-stone-900 dark:text-stone-100 flex items-center gap-2">
+            <Settings size={20} className="text-stone-500 dark:text-stone-400" />
             Kategorileri Yönet
           </h2>
-          <button onClick={onClose} className="text-stone-400 hover:text-stone-600 p-1">
+          <button onClick={onClose} className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 p-1">
             <Plus size={24} className="rotate-45" />
           </button>
         </div>
         
         <div className="p-6 overflow-y-auto flex-1">
           <form onSubmit={handleAddCategory} className="mb-6">
-            <label className="block text-sm font-medium text-stone-700 mb-1">Yeni Kategori Ekle</label>
+            <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1">Yeni Kategori Ekle</label>
             <div className="flex gap-2">
               <input 
                 type="text" 
@@ -703,13 +1482,13 @@ function ManageCategoriesModal({
                   setNewCategory(e.target.value);
                   setError('');
                 }}
-                className="flex-1 px-3 py-2 border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-all"
+                className="flex-1 px-3 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 dark:text-stone-200 transition-all"
                 placeholder="Kategori adı..."
               />
               <button 
                 type="submit"
                 disabled={!newCategory.trim()}
-                className="px-4 py-2 bg-stone-900 text-white rounded-xl font-medium hover:bg-stone-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-900 rounded-xl font-medium hover:bg-stone-800 dark:hover:bg-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Ekle
               </button>
@@ -718,21 +1497,21 @@ function ManageCategoriesModal({
           </form>
 
           <div>
-            <h3 className="text-sm font-medium text-stone-700 mb-3">Mevcut Kategoriler</h3>
+            <h3 className="text-sm font-medium text-stone-700 dark:text-stone-300 mb-3">Mevcut Kategoriler</h3>
             <ul className="space-y-2">
               {categories.map(category => {
                 const itemCount = items.filter(i => i.category === category).length;
                 const isDefault = CATEGORIES.includes(category);
                 
                 return (
-                  <li key={category} className="flex items-center justify-between p-3 bg-stone-50 rounded-xl border border-stone-100">
+                  <li key={category} className="flex items-center justify-between p-3 bg-stone-50 dark:bg-stone-800/50 rounded-xl border border-stone-100 dark:border-stone-800">
                     {editingCategory === category ? (
                       <div className="flex items-center gap-2 w-full">
                         <input
                           type="text"
                           value={editCategoryName}
                           onChange={e => setEditCategoryName(e.target.value)}
-                          className="flex-1 px-2 py-1 border border-stone-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-all text-sm"
+                          className="flex-1 px-2 py-1 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-all text-sm dark:text-stone-200"
                           autoFocus
                           onKeyDown={e => {
                             if (e.key === 'Enter') handleRenameCategory(category);
@@ -741,14 +1520,14 @@ function ManageCategoriesModal({
                         />
                         <button
                           onClick={() => handleRenameCategory(category)}
-                          className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                          className="p-1.5 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 rounded-lg transition-colors"
                           title="Kaydet"
                         >
                           <CheckCircle2 size={16} />
                         </button>
                         <button
                           onClick={() => setEditingCategory(null)}
-                          className="p-1.5 text-stone-400 hover:bg-stone-100 rounded-lg transition-colors"
+                          className="p-1.5 text-stone-400 hover:bg-stone-100 dark:hover:bg-stone-800 rounded-lg transition-colors"
                           title="İptal"
                         >
                           <Plus size={16} className="rotate-45" />
@@ -757,11 +1536,11 @@ function ManageCategoriesModal({
                     ) : (
                       <>
                         <div className="flex items-center gap-3">
-                          <span className="text-stone-500">
+                          <span className={getCategoryColor(category)}>
                             {React.cloneElement(getCategoryIcon(category) as React.ReactElement, { size: 16 })}
                           </span>
-                          <span className="text-sm font-medium text-stone-900">{category}</span>
-                          <span className="text-xs text-stone-500 bg-stone-200/50 px-2 py-0.5 rounded-full">
+                          <span className="text-sm font-medium text-stone-900 dark:text-stone-100">{category}</span>
+                          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${getCategoryBgColor(category)}`}>
                             {itemCount} ürün
                           </span>
                         </div>
@@ -769,14 +1548,14 @@ function ManageCategoriesModal({
                           <div className="flex items-center gap-1">
                             <button
                               onClick={() => startEditing(category)}
-                              className="p-1.5 text-stone-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                              className="p-1.5 text-stone-400 dark:text-stone-500 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
                               title="Düzenle"
                             >
                               <Edit2 size={16} />
                             </button>
                             <button
                               onClick={() => handleDeleteCategory(category)}
-                              className="p-1.5 text-stone-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                              className="p-1.5 text-stone-400 dark:text-stone-500 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/30 rounded-lg transition-colors"
                               title="Sil"
                             >
                               <Trash2 size={16} />
@@ -796,17 +1575,206 @@ function ManageCategoriesModal({
   );
 }
 
+function ProgressReportModal({ 
+  onClose, 
+  stats,
+  categoryStats
+}: { 
+  onClose: () => void, 
+  stats: any,
+  categoryStats: any[]
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        className="bg-white dark:bg-stone-900 w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden border border-stone-200 dark:border-stone-800 flex flex-col max-h-[90vh]"
+      >
+        <div className="p-6 border-b border-stone-100 dark:border-stone-800 flex justify-between items-center shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-rose-50 dark:bg-rose-900/20 rounded-xl">
+              <PieChart className="text-rose-500" size={24} />
+            </div>
+            <div>
+              <h2 className="text-xl font-semibold text-stone-900 dark:text-white">Detaylı İlerleme Raporu</h2>
+              <p className="text-xs text-stone-500 dark:text-stone-400">Çeyiz hazırlığındaki güncel durumunuz</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-200 p-2 hover:bg-stone-100 dark:hover:bg-stone-800 rounded-full transition-colors">
+            <Plus className="rotate-45" size={24} />
+          </button>
+        </div>
+        
+        <div className="p-6 overflow-y-auto space-y-8">
+          {/* Overall Progress */}
+          <div className="space-y-4">
+            <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100 uppercase tracking-wider flex items-center gap-2">
+              <div className="w-1 h-4 bg-rose-500 rounded-full" />
+              Genel Durum
+            </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="p-4 bg-rose-50/50 dark:bg-rose-900/10 rounded-2xl border border-rose-100/50 dark:border-rose-900/20">
+                <div className="text-xs text-rose-600 dark:text-rose-400 font-medium mb-1">Tamamlanma Oranı</div>
+                <div className="text-3xl font-bold text-rose-700 dark:text-rose-300">%{stats.completionRate}</div>
+              </div>
+              <div className="p-4 bg-stone-50 dark:bg-stone-800/50 rounded-2xl border border-stone-100 dark:border-stone-800">
+                <div className="text-xs text-stone-500 dark:text-stone-400 font-medium mb-1">Alınan Ürünler</div>
+                <div className="text-3xl font-bold text-stone-900 dark:text-stone-100">{stats.boughtItems} <span className="text-sm font-normal text-stone-400">/ {stats.totalItems}</span></div>
+              </div>
+              <div className="p-4 bg-stone-50 dark:bg-stone-800/50 rounded-2xl border border-stone-100 dark:border-stone-800">
+                <div className="text-xs text-stone-500 dark:text-stone-400 font-medium mb-1">Kalan Ürünler</div>
+                <div className="text-3xl font-bold text-stone-900 dark:text-stone-100">{stats.remainingItems}</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Category Progress */}
+          <div className="space-y-4">
+            <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100 uppercase tracking-wider flex items-center gap-2">
+              <div className="w-1 h-4 bg-indigo-500 rounded-full" />
+              Kategori Bazlı İlerleme
+            </h3>
+            <div className="grid grid-cols-1 gap-3">
+              {categoryStats.map((cat) => (
+                <div key={cat.category} className="p-4 bg-white dark:bg-stone-800/30 rounded-2xl border border-stone-100 dark:border-stone-800 hover:border-stone-200 dark:hover:border-stone-700 transition-colors">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-3">
+                      <div className={`p-2 rounded-lg ${getCategoryBgColor(cat.category)}`}>
+                        {getCategoryIcon(cat.category)}
+                      </div>
+                      <div>
+                        <div className="text-sm font-semibold text-stone-900 dark:text-stone-100">{cat.category}</div>
+                        <div className="text-[10px] text-stone-500 dark:text-stone-400">{cat.bought} / {cat.total} Ürün Alındı</div>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-sm font-bold text-stone-900 dark:text-stone-100">%{cat.percentage}</div>
+                    </div>
+                  </div>
+                  <div className="h-2 bg-stone-100 dark:bg-stone-800 rounded-full overflow-hidden">
+                    <motion.div 
+                      initial={{ width: 0 }}
+                      animate={{ width: `${cat.percentage}%` }}
+                      transition={{ duration: 1, ease: "easeOut" }}
+                      className={`h-full rounded-full ${
+                        cat.percentage === 100 ? 'bg-emerald-500' : 'bg-indigo-500'
+                      }`}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+        
+        <div className="p-6 bg-stone-50 dark:bg-stone-800/30 border-t border-stone-100 dark:border-stone-800 shrink-0">
+          <div className="flex items-center gap-3 text-stone-500 dark:text-stone-400">
+            <Info size={16} />
+            <p className="text-xs leading-relaxed">
+              Bu rapor, çeyiz listenizdeki her kategorinin tamamlanma durumunu gösterir. %100'e ulaşan kategoriler yeşil ile işaretlenir.
+            </p>
+          </div>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+function BackupModal({ 
+  onClose, 
+  backups,
+  onCreate,
+  onRestore,
+  onDelete
+}: { 
+  onClose: () => void, 
+  backups: any[],
+  onCreate: () => void,
+  onRestore: (backup: any) => void,
+  onDelete: (id: string) => void
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        className="bg-white dark:bg-stone-900 w-full max-w-md rounded-3xl shadow-2xl overflow-hidden border border-stone-200 dark:border-stone-800"
+      >
+        <div className="p-6 border-b border-stone-100 dark:border-stone-800 flex justify-between items-center">
+          <h2 className="text-xl font-semibold text-stone-900 dark:text-white">Yedekleme ve Geri Yükleme</h2>
+          <button onClick={onClose} className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-200">
+            <Plus className="rotate-45" size={24} />
+          </button>
+        </div>
+        
+        <div className="p-6 space-y-6">
+          <button 
+            onClick={onCreate}
+            className="w-full py-3 bg-indigo-600 text-white rounded-2xl font-medium hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2"
+          >
+            <Plus size={20} />
+            Yeni Yedek Oluştur
+          </button>
+
+          <div className="space-y-3">
+            <h3 className="text-sm font-medium text-stone-500 dark:text-stone-400 uppercase tracking-wider">Mevcut Yedekler</h3>
+            {backups.length === 0 ? (
+              <div className="text-center py-8 text-stone-400 italic text-sm">Henüz yedek bulunmuyor.</div>
+            ) : (
+              <div className="max-h-64 overflow-y-auto space-y-2 pr-2">
+                {backups.map((backup) => (
+                  <div key={backup.id} className="p-3 bg-stone-50 dark:bg-stone-800/50 rounded-xl border border-stone-100 dark:border-stone-800 flex items-center justify-between group">
+                    <div>
+                      <div className="text-sm font-medium text-stone-900 dark:text-stone-100">
+                        {new Date(backup.timestamp).toLocaleString('tr-TR')}
+                      </div>
+                      <div className="text-xs text-stone-500">{backup.items.length} Ürün</div>
+                    </div>
+                    <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button 
+                        onClick={() => onRestore(backup)}
+                        className="p-2 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 rounded-lg transition-colors"
+                        title="Geri Yükle"
+                      >
+                        <Clock size={18} />
+                      </button>
+                      <button 
+                        onClick={() => onDelete(backup.id)}
+                        className="p-2 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition-colors"
+                        title="Sil"
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+        
+        <div className="p-6 bg-stone-50 dark:bg-stone-800/30 border-t border-stone-100 dark:border-stone-800">
+          <p className="text-xs text-stone-500 dark:text-stone-400 leading-relaxed">
+            Yedekleriniz güvenli bir şekilde bulutta saklanır. Herhangi bir cihazdan giriş yaparak verilerinize erişebilir ve geri yükleyebilirsiniz.
+          </p>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
 function StatCard({ title, value, subtitle, valueColor = "text-stone-900", onClick }: { title: string, value: string | number, subtitle?: string, valueColor?: string, onClick?: () => void }) {
   const Component = onClick ? 'button' : 'div';
   return (
     <Component 
       onClick={onClick}
-      className={`bg-white p-4 rounded-2xl border border-stone-200 shadow-sm flex flex-col justify-between text-left ${onClick ? 'cursor-pointer hover:border-stone-300 hover:shadow-md transition-all' : ''}`}
+      className={`bg-white dark:bg-stone-900 p-4 rounded-2xl border border-stone-200 dark:border-stone-800 shadow-sm flex flex-col justify-between text-left transition-all ${onClick ? 'cursor-pointer hover:border-stone-300 dark:hover:border-stone-700 hover:shadow-md' : ''}`}
     >
-      <h3 className="text-xs font-medium text-stone-500 uppercase tracking-wider mb-2">{title}</h3>
+      <h3 className="text-xs font-medium text-stone-500 dark:text-stone-400 uppercase tracking-wider mb-2">{title}</h3>
       <div>
-        <div className={`text-2xl font-semibold tracking-tight ${valueColor}`}>{value}</div>
-        {subtitle && <div className="text-xs text-stone-500 mt-1">{subtitle}</div>}
+        <div className={`text-2xl font-semibold tracking-tight ${valueColor.includes('text-stone-900') ? 'text-stone-900 dark:text-stone-100' : valueColor}`}>{value}</div>
+        {subtitle && <div className="text-xs text-stone-500 dark:text-stone-400 mt-1">{subtitle}</div>}
       </div>
     </Component>
   );
@@ -825,47 +1793,77 @@ function ItemListModal({
   toggleItemStatus: (id: string) => void,
   formatCurrency: (amount: number) => string
 }) {
+  const groupedItems = useMemo(() => {
+    const groups: Record<string, Item[]> = {};
+    items.forEach(item => {
+      if (!groups[item.category]) groups[item.category] = [];
+      groups[item.category].push(item);
+    });
+    return groups;
+  }, [items]);
+
+  const categoriesInList = Object.keys(groupedItems).sort();
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/40 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/40 dark:bg-stone-950/60 backdrop-blur-sm">
       <motion.div 
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden flex flex-col max-h-[90vh]"
+        className="bg-white dark:bg-stone-900 rounded-2xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh] border dark:border-stone-800"
       >
-        <div className="px-6 py-4 border-b border-stone-100 flex justify-between items-center flex-shrink-0">
-          <h2 className="text-lg font-semibold text-stone-900">{title}</h2>
-          <button onClick={onClose} className="text-stone-400 hover:text-stone-600 p-1">
+        <div className="px-6 py-4 border-b border-stone-100 dark:border-stone-800 flex justify-between items-center flex-shrink-0 bg-stone-50/50 dark:bg-stone-800/50">
+          <div>
+            <h2 className="text-lg font-semibold text-stone-900 dark:text-stone-100">{title}</h2>
+            <p className="text-[10px] text-stone-500 dark:text-stone-400">{items.length} ürün listeleniyor</p>
+          </div>
+          <button onClick={onClose} className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 p-1">
             <Plus size={24} className="rotate-45" />
           </button>
         </div>
-        <div className="p-6 overflow-y-auto flex-1">
+        <div className="p-6 overflow-y-auto flex-1 space-y-6 custom-scrollbar">
           {items.length === 0 ? (
-            <p className="text-stone-500 text-center py-8">Bu listede ürün bulunmuyor.</p>
+            <div className="text-center py-12">
+              <ShoppingBag size={48} className="mx-auto mb-4 text-stone-200 dark:text-stone-800" />
+              <p className="text-stone-500 dark:text-stone-400">Bu listede ürün bulunmuyor.</p>
+            </div>
           ) : (
-            <ul className="divide-y divide-stone-100">
-              {items.map(item => (
-                <li key={item.id} className="py-3 flex items-center justify-between gap-4">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <button 
-                      onClick={() => toggleItemStatus(item.id)}
-                      className={`flex-shrink-0 transition-colors ${item.isBought ? 'text-emerald-500' : 'text-stone-300 hover:text-stone-400'}`}
-                    >
-                      {item.isBought ? <CheckCircle2 size={20} /> : <Circle size={20} />}
-                    </button>
-                    <div className="min-w-0">
-                      <p className={`text-sm font-medium truncate ${item.isBought ? 'text-stone-500 line-through' : 'text-stone-900'}`}>
-                        {item.name}
-                      </p>
-                      <p className="text-xs text-stone-500">{item.category}</p>
-                    </div>
+            <div className="space-y-8">
+              {categoriesInList.map(category => (
+                <div key={category} className="space-y-3">
+                  <div className="flex items-center gap-2 px-2">
+                    <div className={`w-1.5 h-4 rounded-full ${getCategoryColor(category).replace('text-', 'bg-')}`} />
+                    <h3 className="text-xs font-bold text-stone-500 dark:text-stone-400 uppercase tracking-widest">
+                      {category}
+                      <span className="ml-2 text-[10px] font-normal opacity-60">({groupedItems[category].length})</span>
+                    </h3>
                   </div>
-                  <span className={`text-sm font-medium whitespace-nowrap ${item.isBought ? 'text-stone-400' : 'text-stone-600'}`}>
-                    {formatCurrency(item.price)}
-                  </span>
-                </li>
+                  <ul className="divide-y divide-stone-100 dark:divide-stone-800 bg-stone-50/50 dark:bg-stone-800/30 rounded-2xl border border-stone-100 dark:border-stone-800 overflow-hidden">
+                    {groupedItems[category].map(item => (
+                      <li key={item.id} className="px-4 py-3 flex items-center justify-between gap-4 hover:bg-white dark:hover:bg-stone-800 transition-colors">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <button 
+                            onClick={() => toggleItemStatus(item.id)}
+                            className={`flex-shrink-0 transition-colors ${item.isBought ? 'text-emerald-500' : 'text-stone-300 dark:text-stone-700 hover:text-stone-400 dark:hover:text-stone-600'}`}
+                          >
+                            {item.isBought ? <CheckCircle2 size={20} /> : <Circle size={20} />}
+                          </button>
+                          <div className="min-w-0">
+                            <p className={`text-sm font-medium truncate ${item.isBought ? 'text-stone-500 dark:text-stone-500 line-through' : 'text-stone-900 dark:text-stone-100'}`}>
+                              {item.name}
+                            </p>
+                            {item.notes && <p className="text-[10px] text-stone-400 dark:text-stone-500 truncate">{item.notes}</p>}
+                          </div>
+                        </div>
+                        <span className={`text-sm font-bold whitespace-nowrap ${item.isBought ? 'text-stone-400 dark:text-stone-600' : 'text-stone-900 dark:text-stone-100'}`}>
+                          {formatCurrency(item.price)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               ))}
-            </ul>
+            </div>
           )}
         </div>
       </motion.div>
@@ -873,7 +1871,19 @@ function ItemListModal({
   );
 }
 
-function ItemModal({ onClose, onSubmit, item, title, categories }: { onClose: () => void, onSubmit: (item: any) => void, item?: Item, title: string, categories: Category[] }) {
+function ItemModal({ 
+  onClose, 
+  onSubmit, 
+  item, 
+  title, 
+  categories
+}: { 
+  onClose: () => void, 
+  onSubmit: (item: any) => void, 
+  item?: Item, 
+  title: string, 
+  categories: Category[]
+}) {
   const [name, setName] = useState(item?.name || '');
   const [category, setCategory] = useState<Category>(item?.category || categories[0] || CATEGORIES[0]);
   const [price, setPrice] = useState(item?.price.toString() || '');
@@ -897,7 +1907,7 @@ function ItemModal({ onClose, onSubmit, item, title, categories }: { onClose: ()
     if (!name.trim() || !price) return;
     
     onSubmit({
-      ...(item ? { id: item.id, isBought: item.isBought } : { isBought: false }),
+      ...(item ? { id: item.id, isBought: item.isBought, createdAt: item.createdAt } : { isBought: false }),
       name: name.trim(),
       category,
       price: Number(price),
@@ -908,43 +1918,43 @@ function ItemModal({ onClose, onSubmit, item, title, categories }: { onClose: ()
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/40 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/40 dark:bg-stone-950/60 backdrop-blur-sm">
       <motion.div 
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden"
+        className="bg-white dark:bg-stone-900 rounded-2xl shadow-xl w-full max-w-md overflow-hidden border dark:border-stone-800"
       >
-        <div className="px-6 py-4 border-b border-stone-100 flex justify-between items-center">
-          <h2 className="text-lg font-semibold text-stone-900">{title}</h2>
-          <button onClick={onClose} className="text-stone-400 hover:text-stone-600 p-1">
+        <div className="px-6 py-4 border-b border-stone-100 dark:border-stone-800 flex justify-between items-center">
+          <h2 className="text-lg font-semibold text-stone-900 dark:text-stone-100">{title}</h2>
+          <button onClick={onClose} className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 p-1">
             <Plus size={24} className="rotate-45" />
           </button>
         </div>
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           <div>
-            <label className="block text-sm font-medium text-stone-700 mb-1">Ürün Adı</label>
+            <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1">Ürün Adı</label>
             <input 
               type="text" 
               required
               value={name}
               onChange={e => setName(e.target.value)}
-              className="w-full px-3 py-2 border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-all"
+              className="w-full px-3 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 dark:text-stone-200 transition-all"
               placeholder="Örn: Yemek Takımı"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-stone-700 mb-1">Kategori</label>
+            <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1">Kategori</label>
             <select 
               value={category}
               onChange={e => setCategory(e.target.value as Category)}
-              className="w-full px-3 py-2 border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-all bg-white"
+              className="w-full px-3 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 dark:text-stone-200 transition-all"
             >
               {categories.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-stone-700 mb-1">Tahmini/Gerçek Tutar (TL)</label>
+            <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1">Tahmini/Gerçek Tutar (TL)</label>
             <input 
               type="number" 
               required
@@ -952,44 +1962,44 @@ function ItemModal({ onClose, onSubmit, item, title, categories }: { onClose: ()
               step="0.01"
               value={price}
               onChange={e => setPrice(e.target.value)}
-              className="w-full px-3 py-2 border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-all"
+              className="w-full px-3 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 dark:text-stone-200 transition-all"
               placeholder="0.00"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-stone-700 mb-1">Ürün Linki (İsteğe Bağlı)</label>
+            <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1">Ürün Linki (İsteğe Bağlı)</label>
             <input 
               type="url" 
               value={link}
               onChange={e => setLink(e.target.value)}
-              className="w-full px-3 py-2 border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-all"
+              className="w-full px-3 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 dark:text-stone-200 transition-all"
               placeholder="https://..."
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-stone-700 mb-1">Notlar (İsteğe Bağlı)</label>
+            <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1">Notlar (İsteğe Bağlı)</label>
             <textarea 
               value={notes}
               onChange={e => setNotes(e.target.value)}
-              className="w-full px-3 py-2 border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-all resize-none"
+              className="w-full px-3 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 dark:text-stone-200 transition-all resize-none"
               placeholder="Marka, model, renk vb. detaylar..."
               rows={2}
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-stone-700 mb-1">Ürün Görseli</label>
+            <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1">Ürün Görseli</label>
             <div className="flex items-center gap-4">
               {image && (
                 <label className="cursor-pointer relative group block flex-shrink-0">
-                  <img src={image} alt="Preview" className="w-12 h-12 rounded-lg object-cover border border-stone-200" referrerPolicy="no-referrer" />
+                  <img src={image} alt="Preview" className="w-12 h-12 rounded-lg object-cover border border-stone-200 dark:border-stone-800" referrerPolicy="no-referrer" />
                   <div className="absolute inset-0 bg-black/40 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                     <ImagePlus size={16} className="text-white" />
                   </div>
                   <input type="file" accept="image/*" className="hidden" onChange={handleImageChange} />
                 </label>
               )}
-              <label className="flex-1 flex items-center justify-center px-4 py-2 border border-dashed border-stone-300 rounded-xl hover:bg-stone-50 cursor-pointer transition-colors">
-                <span className="text-sm text-stone-600 flex items-center gap-2">
+              <label className="flex-1 flex items-center justify-center px-4 py-2 border border-dashed border-stone-300 dark:border-stone-700 rounded-xl hover:bg-stone-50 dark:hover:bg-stone-800 cursor-pointer transition-colors">
+                <span className="text-sm text-stone-600 dark:text-stone-400 flex items-center gap-2">
                   <ImagePlus size={18} />
                   {image ? 'Görseli Değiştir' : 'Görsel Ekle'}
                 </span>
@@ -1001,13 +2011,13 @@ function ItemModal({ onClose, onSubmit, item, title, categories }: { onClose: ()
             <button 
               type="button" 
               onClick={onClose}
-              className="flex-1 px-4 py-2 border border-stone-200 text-stone-600 rounded-xl font-medium hover:bg-stone-50 transition-colors"
+              className="flex-1 px-4 py-2 border border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-400 rounded-xl font-medium hover:bg-stone-50 dark:hover:bg-stone-800 transition-colors"
             >
               İptal
             </button>
             <button 
               type="submit"
-              className="flex-1 px-4 py-2 bg-stone-900 text-white rounded-xl font-medium hover:bg-stone-800 transition-colors"
+              className="flex-1 px-4 py-2 bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-900 rounded-xl font-medium hover:bg-stone-800 dark:hover:bg-white transition-colors"
             >
               Kaydet
             </button>
@@ -1018,7 +2028,25 @@ function ItemModal({ onClose, onSubmit, item, title, categories }: { onClose: ()
   );
 }
 
-function BudgetModal({ onClose, onSubmit, currentBudget }: { onClose: () => void, onSubmit: (budget: number) => void, currentBudget: number }) {
+function BudgetModal({ 
+  onClose, 
+  onSubmit, 
+  currentBudget,
+  onReset,
+  items,
+  categories,
+  onImport,
+  onClearBought
+}: { 
+  onClose: () => void, 
+  onSubmit: (budget: number) => void, 
+  currentBudget: number,
+  onReset: () => void,
+  items: Item[],
+  categories: Category[],
+  onImport: (data: any) => void,
+  onClearBought: () => void
+}) {
   const [budget, setBudget] = useState(currentBudget.toString());
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -1028,56 +2056,172 @@ function BudgetModal({ onClose, onSubmit, currentBudget }: { onClose: () => void
     onClose();
   };
 
+  const exportToJSON = () => {
+    const data = {
+      items,
+      budget: currentBudget,
+      categories,
+      exportDate: new Date().toISOString(),
+      version: '2.0'
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `ceyiz_listem_yedek_${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const exportToCSV = () => {
+    const headers = ['Ürün Adı', 'Kategori', 'Fiyat (TL)', 'Durum', 'Notlar', 'Link', 'Eklenme Tarihi'];
+    const rows = items.map(item => [
+      item.name,
+      item.category,
+      item.price,
+      item.isBought ? 'Alındı' : 'Alınacak',
+      item.notes || '',
+      item.link || '',
+      item.createdAt ? new Date(item.createdAt).toLocaleDateString('tr-TR') : ''
+    ]);
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => row.map(cell => `"${cell}"`).join(','))
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `ceyiz_listem_${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const data = JSON.parse(event.target?.result as string);
+        if (window.confirm('Mevcut verileriniz üzerine yazılacak. Devam etmek istiyor musunuz?')) {
+          onImport(data);
+          onClose();
+        }
+      } catch (error) {
+        alert('Geçersiz dosya formatı. Lütfen geçerli bir JSON yedeği seçin.');
+      }
+    };
+    reader.readAsText(file);
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/40 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/40 dark:bg-stone-950/60 backdrop-blur-sm">
       <motion.div 
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden"
+        className="bg-white dark:bg-stone-900 rounded-2xl shadow-xl w-full max-w-md overflow-hidden border dark:border-stone-800"
       >
-        <div className="px-6 py-4 border-b border-stone-100 flex justify-between items-center">
-          <h2 className="text-lg font-semibold text-stone-900 flex items-center gap-2">
+        <div className="px-6 py-4 border-b border-stone-100 dark:border-stone-800 flex justify-between items-center">
+          <h2 className="text-lg font-semibold text-stone-900 dark:text-stone-100 flex items-center gap-2">
             <Wallet size={20} className="text-rose-500" />
-            Bütçe Ayarları
+            Ayarlar & Bütçe
           </h2>
-          <button onClick={onClose} className="text-stone-400 hover:text-stone-600 p-1">
+          <button onClick={onClose} className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 p-1">
             <Plus size={24} className="rotate-45" />
           </button>
         </div>
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-stone-700 mb-1">Toplam Bütçe (TL)</label>
-            <input 
-              type="number" 
-              required
-              min="0"
-              step="100"
-              value={budget}
-              onChange={e => setBudget(e.target.value)}
-              className="w-full px-3 py-2 border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-all text-lg font-medium"
-              placeholder="0.00"
-            />
-            <p className="mt-2 text-xs text-stone-500">
-              Çeyiz alışverişiniz için ayırdığınız toplam bütçeyi belirleyin. Bu tutar, ilerleme çubuğunda ve kalan bütçe hesaplamalarında kullanılacaktır.
-            </p>
-          </div>
-          <div className="pt-4 flex gap-3">
-            <button 
-              type="button" 
-              onClick={onClose}
-              className="flex-1 px-4 py-2 border border-stone-200 text-stone-600 rounded-xl font-medium hover:bg-stone-50 transition-colors"
-            >
-              İptal
-            </button>
+        <div className="p-6 space-y-6 max-h-[80vh] overflow-y-auto custom-scrollbar">
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1">Toplam Bütçe (TL)</label>
+              <input 
+                type="number" 
+                required
+                min="0"
+                step="100"
+                value={budget}
+                onChange={e => setBudget(e.target.value)}
+                className="w-full px-3 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-all text-lg font-medium dark:text-stone-100"
+                placeholder="0.00"
+              />
+            </div>
+            
             <button 
               type="submit"
-              className="flex-1 px-4 py-2 bg-stone-900 text-white rounded-xl font-medium hover:bg-stone-800 transition-colors"
+              className="w-full px-4 py-2 bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-900 rounded-xl font-medium hover:bg-stone-800 dark:hover:bg-white transition-colors"
             >
-              Kaydet
+              Bütçeyi Güncelle
             </button>
+          </form>
+
+          <div className="pt-6 border-t border-stone-100 dark:border-stone-800">
+            <h3 className="text-sm font-medium text-stone-900 dark:text-stone-100 mb-3">Veri Aktar / Yedekle</h3>
+            <div className="grid grid-cols-2 gap-3">
+              <button 
+                onClick={exportToJSON}
+                className="flex items-center justify-center gap-2 px-3 py-2 bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-300 rounded-xl text-xs font-medium hover:bg-stone-200 dark:hover:bg-stone-700 transition-colors"
+              >
+                <FileJson size={16} className="text-indigo-500" />
+                JSON İndir
+              </button>
+              <button 
+                onClick={exportToCSV}
+                className="flex items-center justify-center gap-2 px-3 py-2 bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-300 rounded-xl text-xs font-medium hover:bg-stone-200 dark:hover:bg-stone-700 transition-colors"
+              >
+                <FileSpreadsheet size={16} className="text-emerald-500" />
+                CSV İndir
+              </button>
+              <label className="col-span-2 flex items-center justify-center gap-2 px-3 py-2 border border-dashed border-stone-300 dark:border-stone-700 text-stone-600 dark:text-stone-400 rounded-xl text-xs font-medium hover:bg-stone-50 dark:hover:bg-stone-800 transition-colors cursor-pointer">
+                <Upload size={16} className="text-amber-500" />
+                Yedek Yükle (JSON)
+                <input type="file" accept=".json" className="hidden" onChange={handleImport} />
+              </label>
+            </div>
           </div>
-        </form>
+
+          <div className="pt-6 border-t border-stone-100 dark:border-stone-800">
+            <h3 className="text-sm font-medium text-stone-900 dark:text-stone-100 mb-3">Tehlikeli Bölge</h3>
+            <div className="flex flex-col gap-3">
+              <button 
+                onClick={() => {
+                  if (window.confirm('Tüm ürünlerin "Alındı" işaretleri kaldırılacaktır. Onaylıyor musunuz?')) {
+                    onClearBought();
+                    onClose();
+                  }
+                }}
+                className="flex items-center justify-center gap-2 px-4 py-2 border border-amber-200 dark:border-amber-900/30 text-amber-600 dark:text-amber-400 rounded-xl font-medium hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors text-sm"
+              >
+                <Circle size={16} />
+                İşaretli Ürünleri Temizle
+              </button>
+              <button 
+                onClick={() => {
+                  if (window.confirm('Tüm verileriniz (ürünler, bütçe ve kategoriler) silinecek ve varsayılan ayarlara dönülecektir. Bu işlem geri alınamaz. Onaylıyor musunuz?')) {
+                    onReset();
+                    onClose();
+                  }
+                }}
+                className="flex items-center justify-center gap-2 px-4 py-2 border border-rose-200 dark:border-rose-900/30 text-rose-600 dark:text-rose-400 rounded-xl font-medium hover:bg-rose-50 dark:hover:bg-rose-900/20 transition-colors text-sm"
+              >
+                <Trash2 size={16} />
+                Tüm Verileri Sıfırla
+              </button>
+              <p className="text-[10px] text-stone-400 dark:text-stone-500 text-center flex items-center justify-center gap-1">
+                <CheckCircle2 size={10} className="text-emerald-500" />
+                Tüm değişiklikler otomatik olarak tarayıcınıza kaydedilir.
+              </p>
+            </div>
+          </div>
+        </div>
       </motion.div>
     </div>
   );
@@ -1119,19 +2263,19 @@ function ReportModal({
   }, [items, categories]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/40 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/40 dark:bg-stone-950/60 backdrop-blur-sm">
       <motion.div 
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="bg-white rounded-2xl shadow-xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]"
+        className="bg-white dark:bg-stone-900 rounded-2xl shadow-xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh] border dark:border-stone-800"
       >
-        <div className="px-6 py-4 border-b border-stone-100 flex justify-between items-center flex-shrink-0">
-          <h2 className="text-lg font-semibold text-stone-900 flex items-center gap-2">
+        <div className="px-6 py-4 border-b border-stone-100 dark:border-stone-800 flex justify-between items-center flex-shrink-0">
+          <h2 className="text-lg font-semibold text-stone-900 dark:text-stone-100 flex items-center gap-2">
             <FileText size={20} className="text-rose-500" />
             Çeyiz Raporu
           </h2>
-          <button onClick={onClose} className="text-stone-400 hover:text-stone-600 p-1">
+          <button onClick={onClose} className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 p-1">
             <Plus size={24} className="rotate-45" />
           </button>
         </div>
@@ -1139,63 +2283,63 @@ function ReportModal({
         <div className="p-6 overflow-y-auto flex-1 space-y-8">
           {/* Overall Summary */}
           <section>
-            <h3 className="text-sm font-semibold text-stone-900 uppercase tracking-wider mb-4">Genel Özet</h3>
+            <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100 uppercase tracking-wider mb-4">Genel Özet</h3>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <div className="bg-stone-50 p-4 rounded-xl border border-stone-100">
-                <p className="text-xs text-stone-500 mb-1">Toplam Bütçe</p>
-                <p className="text-lg font-semibold text-stone-900">{formatCurrency(budget)}</p>
+              <div className="bg-stone-50 dark:bg-stone-800/50 p-4 rounded-xl border border-stone-100 dark:border-stone-800">
+                <p className="text-xs text-stone-500 dark:text-stone-400 mb-1">Toplam Bütçe</p>
+                <p className="text-lg font-semibold text-stone-900 dark:text-stone-100">{formatCurrency(budget)}</p>
               </div>
-              <div className="bg-rose-50 p-4 rounded-xl border border-rose-100">
-                <p className="text-xs text-rose-600 mb-1">Harcanan</p>
-                <p className="text-lg font-semibold text-rose-700">{formatCurrency(stats.totalSpent)}</p>
+              <div className="bg-rose-50 dark:bg-rose-900/20 p-4 rounded-xl border border-rose-100 dark:border-rose-900/30">
+                <p className="text-xs text-rose-600 dark:text-rose-400 mb-1">Harcanan</p>
+                <p className="text-lg font-semibold text-rose-700 dark:text-rose-300">{formatCurrency(stats.totalSpent)}</p>
               </div>
-              <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-100">
-                <p className="text-xs text-emerald-600 mb-1">Kalan Bütçe</p>
-                <p className="text-lg font-semibold text-emerald-700">{formatCurrency(stats.remainingBudget)}</p>
+              <div className="bg-emerald-50 dark:bg-emerald-900/20 p-4 rounded-xl border border-emerald-100 dark:border-emerald-900/30">
+                <p className="text-xs text-emerald-600 dark:text-emerald-400 mb-1">Kalan Bütçe</p>
+                <p className="text-lg font-semibold text-emerald-700 dark:text-emerald-300">{formatCurrency(stats.remainingBudget)}</p>
               </div>
-              <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
-                <p className="text-xs text-blue-600 mb-1">İlerleme</p>
-                <p className="text-lg font-semibold text-blue-700">%{stats.completionRate}</p>
-                <p className="text-[10px] text-blue-500 mt-0.5">{stats.boughtItems} / {stats.totalItems} ürün</p>
+              <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl border border-blue-100 dark:border-blue-900/30">
+                <p className="text-xs text-blue-600 dark:text-blue-400 mb-1">İlerleme</p>
+                <p className="text-lg font-semibold text-blue-700 dark:text-blue-300">%{stats.completionRate}</p>
+                <p className="text-[10px] text-blue-500 dark:text-blue-400 mt-0.5">{stats.boughtItems} / {stats.totalItems} ürün</p>
               </div>
             </div>
           </section>
 
           {/* Category Breakdown */}
           <section>
-            <h3 className="text-sm font-semibold text-stone-900 uppercase tracking-wider mb-4">Kategori Dağılımı</h3>
+            <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100 uppercase tracking-wider mb-4">Kategori Dağılımı</h3>
             {categoryStats.length === 0 ? (
-              <p className="text-stone-500 text-sm text-center py-4">Henüz ürün eklenmemiş.</p>
+              <p className="text-stone-500 dark:text-stone-400 text-sm text-center py-4">Henüz ürün eklenmemiş.</p>
             ) : (
               <div className="space-y-4">
                 {categoryStats.map(stat => (
-                  <div key={stat.category} className="bg-white border border-stone-200 rounded-xl p-4 shadow-sm">
+                  <div key={stat.category} className="bg-white dark:bg-stone-800/30 border border-stone-200 dark:border-stone-800 rounded-xl p-4 shadow-sm">
                     <div className="flex justify-between items-center mb-3">
                       <div className="flex items-center gap-2">
-                        <span className="text-stone-500">
+                        <span className={getCategoryColor(stat.category)}>
                           {React.cloneElement(getCategoryIcon(stat.category) as React.ReactElement, { size: 18 })}
                         </span>
-                        <h4 className="font-medium text-stone-900">{stat.category}</h4>
+                        <h4 className="font-medium text-stone-900 dark:text-stone-100">{stat.category}</h4>
                       </div>
-                      <span className="text-xs font-medium bg-stone-100 text-stone-600 px-2 py-1 rounded-md">
+                      <span className={`text-xs font-medium px-2 py-1 rounded-md ${getCategoryBgColor(stat.category)}`}>
                         {stat.bought} / {stat.total} ürün
                       </span>
                     </div>
                     
                     <div className="grid grid-cols-2 gap-4 mb-3">
                       <div>
-                        <p className="text-xs text-stone-500">Harcanan</p>
-                        <p className="text-sm font-semibold text-stone-900">{formatCurrency(stat.spent)}</p>
+                        <p className="text-xs text-stone-500 dark:text-stone-400">Harcanan</p>
+                        <p className="text-sm font-semibold text-stone-900 dark:text-stone-100">{formatCurrency(stat.spent)}</p>
                       </div>
                       <div>
-                        <p className="text-xs text-stone-500">Kalan Tahmini Maliyet</p>
-                        <p className="text-sm font-semibold text-stone-900">{formatCurrency(stat.remainingCost)}</p>
+                        <p className="text-xs text-stone-500 dark:text-stone-400">Kalan Tahmini Maliyet</p>
+                        <p className="text-sm font-semibold text-stone-900 dark:text-stone-100">{formatCurrency(stat.remainingCost)}</p>
                       </div>
                     </div>
 
-                    <div className="h-2 bg-stone-100 rounded-full overflow-hidden">
+                    <div className="h-2 bg-stone-100 dark:bg-stone-700 rounded-full overflow-hidden">
                       <div 
-                        className="h-full bg-rose-400 rounded-full"
+                        className={`h-full rounded-full ${getCategoryColor(stat.category).replace('text-', 'bg-')}`}
                         style={{ width: `${stat.completionRate}%` }}
                       />
                     </div>
