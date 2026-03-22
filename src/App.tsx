@@ -1042,6 +1042,27 @@ function ItemDetailModal({
               </div>
             )}
 
+            <div>
+              <h4 className="text-xs font-bold text-stone-400 dark:text-stone-600 uppercase tracking-widest mb-2 flex items-center gap-2">
+                <Search size={14} />
+                Fiyat Araştır
+              </h4>
+              <div className="grid grid-cols-2 gap-2">
+                <a href={`https://www.trendyol.com/sr?q=${encodeURIComponent(item.name)}`} target="_blank" rel="noopener noreferrer" className="px-4 py-3 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 text-stone-700 dark:text-stone-300 text-sm font-medium rounded-xl hover:border-[#F27A1A] hover:text-[#F27A1A] transition-colors flex items-center justify-center gap-2 shadow-sm">
+                  Trendyol <ExternalLink size={14} />
+                </a>
+                <a href={`https://www.hepsiburada.com/ara?q=${encodeURIComponent(item.name)}`} target="_blank" rel="noopener noreferrer" className="px-4 py-3 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 text-stone-700 dark:text-stone-300 text-sm font-medium rounded-xl hover:border-[#FF6000] hover:text-[#FF6000] transition-colors flex items-center justify-center gap-2 shadow-sm">
+                  Hepsiburada <ExternalLink size={14} />
+                </a>
+                <a href={`https://www.amazon.com.tr/s?k=${encodeURIComponent(item.name)}`} target="_blank" rel="noopener noreferrer" className="px-4 py-3 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 text-stone-700 dark:text-stone-300 text-sm font-medium rounded-xl hover:border-[#232F3E] hover:text-[#232F3E] transition-colors flex items-center justify-center gap-2 shadow-sm">
+                  Amazon <ExternalLink size={14} />
+                </a>
+                <a href={`https://www.n11.com/arama?q=${encodeURIComponent(item.name)}`} target="_blank" rel="noopener noreferrer" className="px-4 py-3 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 text-stone-700 dark:text-stone-300 text-sm font-medium rounded-xl hover:border-[#5C3EBC] hover:text-[#5C3EBC] transition-colors flex items-center justify-center gap-2 shadow-sm">
+                  N11 <ExternalLink size={14} />
+                </a>
+              </div>
+            </div>
+
             <div className="flex gap-3 pt-4">
               <button 
                 onClick={() => onEdit(item)}
