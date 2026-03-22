@@ -8,6 +8,7 @@ export interface Item {
   isBought: boolean;
   notes?: string;
   image?: string;
+  imageAlt?: string;
   link?: string;
   createdAt?: number;
 }

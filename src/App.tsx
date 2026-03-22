@@ -30,9 +30,6 @@ import {
   Tag,
   Link as LinkIcon,
   FileText,
-  Sun,
-  Moon,
-  LogIn,
   ArrowUpDown,
   Clock,
   Sparkles,
@@ -41,79 +38,10 @@ import {
   FileJson,
   FileSpreadsheet,
   LayoutGrid,
-  List
+  List,
+  Palette
 } from 'lucide-react';
 import { Item, Category, CATEGORIES, INITIAL_ITEMS } from './types';
-import { 
-  auth, 
-  db, 
-  googleProvider, 
-  signInWithPopup, 
-  signOut, 
-  onAuthStateChanged,
-  doc, 
-  collection, 
-  onSnapshot, 
-  setDoc, 
-  deleteDoc, 
-  getDoc, 
-  getDocs, 
-  writeBatch, 
-  query, 
-  orderBy,
-  getDocFromServer
-} from './firebase';
-
-enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
-
-interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId: string | undefined;
-    email: string | null | undefined;
-    emailVerified: boolean | undefined;
-    isAnonymous: boolean | undefined;
-    tenantId: string | null | undefined;
-    providerInfo: {
-      providerId: string;
-      displayName: string | null;
-      email: string | null;
-      photoUrl: string | null;
-    }[];
-  }
-}
-
-const handleFirestoreError = (error: unknown, operationType: OperationType, path: string | null) => {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData.map(provider => ({
-        providerId: provider.providerId,
-        displayName: provider.displayName,
-        email: provider.email,
-        photoUrl: provider.photoURL
-      })) || []
-    },
-    operationType,
-    path
-  };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
-};
 
 const getCategoryIcon = (category: string) => {
   const CATEGORY_ICONS: Record<string, React.ReactNode> = {
@@ -131,7 +59,7 @@ const getCategoryIcon = (category: string) => {
 
 const getCategoryColor = (category: string) => {
   const COLORS: Record<string, string> = {
-    'Mutfak': 'text-rose-500',
+    'Mutfak': 'text-accent-500',
     'Yatak Odası': 'text-blue-500',
     'Banyo': 'text-cyan-500',
     'Elektronik': 'text-amber-500',
@@ -142,9 +70,22 @@ const getCategoryColor = (category: string) => {
   return COLORS[category] || 'text-indigo-500';
 };
 
+const getCategoryBgColorSolid = (category: string) => {
+  const COLORS: Record<string, string> = {
+    'Mutfak': 'bg-accent-500',
+    'Yatak Odası': 'bg-blue-500',
+    'Banyo': 'bg-cyan-500',
+    'Elektronik': 'bg-amber-500',
+    'Salon': 'bg-emerald-500',
+    'Dekorasyon': 'bg-purple-500',
+    'Diğer': 'bg-stone-500',
+  };
+  return COLORS[category] || 'bg-indigo-500';
+};
+
 const getCategoryBgColor = (category: string) => {
   const BG_COLORS: Record<string, string> = {
-    'Mutfak': 'bg-rose-50 dark:bg-rose-900/20 border-rose-100 dark:border-rose-900/30 text-rose-700 dark:text-rose-300',
+    'Mutfak': 'bg-accent-50 dark:bg-accent-900/20 border-accent-100 dark:border-accent-900/30 text-accent-700 dark:text-accent-300',
     'Yatak Odası': 'bg-blue-50 dark:bg-blue-900/20 border-blue-100 dark:border-blue-900/30 text-blue-700 dark:text-blue-300',
     'Banyo': 'bg-cyan-50 dark:bg-cyan-900/20 border-cyan-100 dark:border-cyan-900/30 text-cyan-700 dark:text-cyan-300',
     'Elektronik': 'bg-amber-50 dark:bg-amber-900/20 border-amber-100 dark:border-amber-900/30 text-amber-700 dark:text-amber-300',
@@ -190,6 +131,8 @@ export default function App() {
   const [isManageCategoriesModalOpen, setIsManageCategoriesModalOpen] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [isBudgetAnalysisModalOpen, setIsBudgetAnalysisModalOpen] = useState(false);
+  const [isThemeModalOpen, setIsThemeModalOpen] = useState(false);
+  const [isProgressReportModalOpen, setIsProgressReportModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<Item | null>(null);
   const [activeCategory, setActiveCategory] = useState<Category | 'Tümü'>(() => {
     const saved = localStorage.getItem('ceyiz_active_category');
@@ -206,126 +149,20 @@ export default function App() {
   const [sortBy, setSortBy] = useState<'date-newest' | 'date-oldest' | 'price-asc' | 'price-desc'>('date-newest');
   const [filterStatus, setFilterStatus] = useState<'all' | 'bought' | 'remaining'>('all');
   const [viewingItemsType, setViewingItemsType] = useState<'bought' | 'remaining' | null>(null);
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    const saved = localStorage.getItem('ceyiz_theme');
-    return (saved as 'light' | 'dark') || 'light';
-  });
-  const [colorTheme, setColorTheme] = useState<string>(() => {
+  const [colorTheme, setColorTheme] = useState<'rose' | 'emerald' | 'indigo' | 'amber' | 'violet' | 'slate'>(() => {
     const saved = localStorage.getItem('ceyiz_color_theme');
-    return saved || 'rose';
+    return (saved as any) || 'rose';
   });
-  const [isThemeSelectorOpen, setIsThemeSelectorOpen] = useState(false);
 
-  const [user, setUser] = useState<any>(null);
-  const [isAuthReady, setIsAuthReady] = useState(false);
-  const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
-  const [backups, setBackups] = useState<any[]>([]);
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [isProgressReportModalOpen, setIsProgressReportModalOpen] = useState(false);
+  useEffect(() => {
+    document.documentElement.setAttribute('data-color-theme', colorTheme);
+    localStorage.setItem('ceyiz_color_theme', colorTheme);
+  }, [colorTheme]);
+
   const [viewMode, setViewMode] = useState<'list' | 'grid'>(() => {
     const saved = localStorage.getItem('ceyiz_view_mode');
     return (saved as 'list' | 'grid') || 'list';
   });
-
-  // Auth Listener
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-      setIsAuthReady(true);
-    });
-    return () => unsubscribe();
-  }, []);
-
-  // Firestore Sync - Fetch
-  useEffect(() => {
-    if (!isAuthReady || !user) return;
-
-    const itemsRef = collection(db, `users/${user.uid}/items`);
-    const settingsRef = doc(db, `users/${user.uid}/settings/current`);
-
-    const unsubscribeItems = onSnapshot(itemsRef, (snapshot) => {
-      const firestoreItems = snapshot.docs.map(doc => doc.data() as Item);
-      if (firestoreItems.length > 0) {
-        setItems(firestoreItems);
-      }
-    }, (error) => handleFirestoreError(error, OperationType.GET, `users/${user.uid}/items`));
-
-    const unsubscribeSettings = onSnapshot(settingsRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.data();
-        if (data.budget) setBudget(data.budget);
-        if (data.categories) setCategories(data.categories);
-        if (data.theme) setTheme(data.theme);
-        if (data.colorTheme) setColorTheme(data.colorTheme);
-        if (data.viewMode) setViewMode(data.viewMode);
-      }
-    }, (error) => handleFirestoreError(error, OperationType.GET, `users/${user.uid}/settings/current`));
-
-    // Fetch backups
-    const backupsRef = query(collection(db, `users/${user.uid}/backups`), orderBy('timestamp', 'desc'));
-    const unsubscribeBackups = onSnapshot(backupsRef, (snapshot) => {
-      setBackups(snapshot.docs.map(doc => doc.data()));
-    }, (error) => handleFirestoreError(error, OperationType.GET, `users/${user.uid}/backups`));
-
-    return () => {
-      unsubscribeItems();
-      unsubscribeSettings();
-      unsubscribeBackups();
-    };
-  }, [isAuthReady, user]);
-
-  // Firestore Sync - Push (Debounced or on change)
-  useEffect(() => {
-    if (!user || !isAuthReady || isSyncing) return;
-
-    const syncData = async () => {
-      setIsSyncing(true);
-      try {
-        const batch = writeBatch(db);
-        
-        // Sync Items
-        // Note: For efficiency in a real app, we'd only sync changes.
-        // Here we'll do a simple approach: update/set all items.
-        for (const item of items) {
-          const itemRef = doc(db, `users/${user.uid}/items`, item.id);
-          batch.set(itemRef, item);
-        }
-
-        // Sync Settings
-        const settingsRef = doc(db, `users/${user.uid}/settings/current`);
-        batch.set(settingsRef, {
-          budget,
-          categories,
-          theme,
-          colorTheme,
-          viewMode
-        });
-
-        await batch.commit();
-      } catch (error) {
-        console.error("Sync Error:", error);
-      } finally {
-        setIsSyncing(false);
-      }
-    };
-
-    const timer = setTimeout(syncData, 2000); // Sync after 2s of inactivity
-    return () => clearTimeout(timer);
-  }, [items, budget, categories, theme, user, isAuthReady]);
-
-  useEffect(() => {
-    localStorage.setItem('ceyiz_theme', theme);
-    if (theme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-  }, [theme]);
-
-  useEffect(() => {
-    localStorage.setItem('ceyiz_color_theme', colorTheme);
-    document.documentElement.setAttribute('data-color-theme', colorTheme);
-  }, [colorTheme]);
 
   useEffect(() => {
     if (toast) {
@@ -385,66 +222,8 @@ export default function App() {
     setItems(INITIAL_ITEMS);
     setBudget(200000);
     setCategories(CATEGORIES);
-    setTheme('light');
     setActiveCategory('Tümü');
     setIsGroupedByCategory(false);
-    if (user) {
-      // Also clear Firestore if user wants? For now just local reset.
-    }
-  };
-
-  const handleLogin = async () => {
-    try {
-      await signInWithPopup(auth, googleProvider);
-      setToast({ id: Date.now().toString(), message: 'Giriş yapıldı!', itemId: '' });
-    } catch (error) {
-      console.error("Login Error:", error);
-    }
-  };
-
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-      setToast({ id: Date.now().toString(), message: 'Çıkış yapıldı!', itemId: '' });
-    } catch (error) {
-      console.error("Logout Error:", error);
-    }
-  };
-
-  const handleCreateBackup = async () => {
-    if (!user) return;
-    const backupId = crypto.randomUUID();
-    const backup = {
-      id: backupId,
-      timestamp: Date.now(),
-      items,
-      budget,
-      categories
-    };
-    try {
-      await setDoc(doc(db, `users/${user.uid}/backups`, backupId), backup);
-      setToast({ id: Date.now().toString(), message: 'Yedek oluşturuldu!', itemId: '' });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, `users/${user.uid}/backups/${backupId}`);
-    }
-  };
-
-  const handleRestoreBackup = (backup: any) => {
-    setItems(backup.items);
-    setBudget(backup.budget);
-    setCategories(backup.categories);
-    setIsBackupModalOpen(false);
-    setToast({ id: Date.now().toString(), message: 'Yedek geri yüklendi!', itemId: '' });
-  };
-
-  const handleDeleteBackup = async (backupId: string) => {
-    if (!user) return;
-    try {
-      await deleteDoc(doc(db, `users/${user.uid}/backups`, backupId));
-      setToast({ id: Date.now().toString(), message: 'Yedek silindi!', itemId: '' });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `users/${user.uid}/backups/${backupId}`);
-    }
   };
 
   const stats = useMemo(() => {
@@ -539,7 +318,7 @@ export default function App() {
           >
             <div className="aspect-square relative overflow-hidden bg-stone-100 dark:bg-stone-800 rounded-xl mb-3">
               {item.image ? (
-                <img src={item.image} alt={item.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                <img src={item.image} alt={item.imageAlt || item.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
               ) : (
                 <div className="w-full h-full flex items-center justify-center text-stone-300 dark:text-stone-700">
                   <ImageIcon size={48} />
@@ -552,7 +331,7 @@ export default function App() {
               </h3>
             </div>
             <div className="flex items-center justify-between mt-auto">
-              <span className={`text-xs font-bold ${item.isBought ? 'text-stone-400' : 'text-rose-600 dark:text-rose-400'}`}>
+              <span className={`text-xs font-bold ${item.isBought ? 'text-stone-400' : 'text-accent-600 dark:text-accent-400'}`}>
                 {formatCurrency(item.price)}
               </span>
               <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${getCategoryBgColor(item.category)}`}>
@@ -581,7 +360,7 @@ export default function App() {
             </button>
             <button 
               onClick={(e) => { e.stopPropagation(); handleDeleteItem(item.id); }}
-              className="w-8 h-8 rounded-full bg-white/80 dark:bg-stone-900/80 backdrop-blur-md flex items-center justify-center text-stone-600 dark:text-stone-400 hover:text-rose-500 shadow-sm"
+              className="w-8 h-8 rounded-full bg-white/80 dark:bg-stone-900/80 backdrop-blur-md flex items-center justify-center text-stone-600 dark:text-stone-400 hover:text-accent-500 shadow-sm"
             >
               <Trash2 size={16} />
             </button>
@@ -608,7 +387,7 @@ export default function App() {
           </button>
           
           {item.image ? (
-            <img src={item.image} alt={item.name} className="w-12 h-12 rounded-lg object-cover border border-stone-200 dark:border-stone-800 flex-shrink-0" referrerPolicy="no-referrer" />
+            <img src={item.image} alt={item.imageAlt || item.name} className="w-12 h-12 rounded-lg object-cover border border-stone-200 dark:border-stone-800 flex-shrink-0" referrerPolicy="no-referrer" />
           ) : (
             <div className="w-12 h-12 rounded-lg bg-stone-100 dark:bg-stone-800 border border-stone-200 dark:border-stone-800 flex items-center justify-center flex-shrink-0 text-stone-400 dark:text-stone-600">
               <ImageIcon size={20} />
@@ -652,7 +431,7 @@ export default function App() {
             </button>
             <button 
               onClick={() => handleDeleteItem(item.id)}
-              className="p-2 text-stone-400 dark:text-stone-600 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/30 rounded-lg transition-colors"
+              className="p-2 text-stone-400 dark:text-stone-600 hover:text-accent-600 dark:hover:text-accent-400 hover:bg-accent-50 dark:hover:bg-accent-900/30 rounded-lg transition-colors"
             >
               <Trash2 size={16} />
             </button>
@@ -787,7 +566,7 @@ export default function App() {
                 toggleItemStatus(toast.itemId, true);
                 setToast(null);
               }}
-              className="text-sm font-semibold text-rose-400 hover:text-rose-300 transition-colors"
+              className="text-sm font-semibold text-accent-400 hover:text-accent-300 transition-colors"
             >
               Geri Al
             </button>
@@ -799,44 +578,12 @@ export default function App() {
       <header className="bg-white dark:bg-stone-900 border-b border-stone-200 dark:border-stone-800 sticky top-0 z-10 transition-colors">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-rose-100 dark:bg-rose-900/30 rounded-lg flex items-center justify-center text-rose-600 dark:text-rose-400">
+            <div className="w-8 h-8 bg-accent-100 dark:bg-accent-900/30 rounded-lg flex items-center justify-center text-accent-600 dark:text-accent-400">
               <ShoppingBag size={20} />
             </div>
             <h1 className="text-xl font-semibold text-stone-900 dark:text-white tracking-tight">Çeyiz Listem</h1>
           </div>
           <div className="flex items-center gap-2">
-            {user && (
-              <div className="flex items-center gap-1.5 px-2 py-1 bg-emerald-50 dark:bg-emerald-900/20 rounded-lg border border-emerald-100 dark:border-emerald-900/30">
-                <div className={`w-1.5 h-1.5 rounded-full ${isSyncing ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`} />
-                <span className="text-[10px] font-medium text-emerald-700 dark:text-emerald-300 uppercase tracking-wider">
-                  {isSyncing ? 'Eşitleniyor' : 'Bulutla Eşitlendi'}
-                </span>
-              </div>
-            )}
-            {user ? (
-              <div className="flex items-center gap-2">
-                <img 
-                  src={user.photoURL} 
-                  alt={user.displayName} 
-                  className="w-8 h-8 rounded-full border border-stone-200 dark:border-stone-700"
-                  referrerPolicy="no-referrer"
-                />
-                <button
-                  onClick={handleLogout}
-                  className="text-xs font-medium text-stone-500 hover:text-rose-600 transition-colors"
-                >
-                  Çıkış
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={handleLogin}
-                className="flex items-center gap-2 text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 px-3 py-2 rounded-xl transition-colors"
-              >
-                <LogIn size={18} />
-                <span>Giriş Yap</span>
-              </button>
-            )}
             <motion.button
               whileTap={{ scale: 0.9 }}
               whileHover={{ scale: 1.05 }}
@@ -846,70 +593,40 @@ export default function App() {
             >
               <Wallet size={20} />
             </motion.button>
-            <motion.button
-              whileTap={{ scale: 0.9 }}
-              whileHover={{ scale: 1.05 }}
-              onClick={() => setIsThemeSelectorOpen(true)}
-              className="relative p-2 w-10 h-10 flex items-center justify-center rounded-xl bg-accent-50 dark:bg-accent-900/20 text-accent-600 dark:text-accent-400 transition-colors border border-accent-100 dark:border-accent-900/30 shadow-sm"
-              title="Tema Seç"
+            <button 
+              onClick={() => setIsThemeModalOpen(true)}
+              className="flex items-center gap-2 text-sm font-medium text-stone-600 hover:text-stone-900 dark:text-stone-400 dark:hover:text-stone-100 transition-colors px-3 py-2 rounded-md hover:bg-stone-100 dark:hover:bg-stone-800"
             >
-              <Sparkles size={20} />
-            </motion.button>
-            <motion.button
-              whileTap={{ scale: 0.9 }}
-              whileHover={{ scale: 1.05 }}
-              onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
-              className="relative p-2 w-10 h-10 flex items-center justify-center rounded-xl bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 transition-colors border border-stone-200 dark:border-stone-700 shadow-sm"
-              title={theme === 'light' ? 'Karanlık Mod' : 'Aydınlık Mod'}
-            >
-              <AnimatePresence mode="wait" initial={false}>
-                <motion.div
-                  key={theme}
-                  initial={{ y: 10, opacity: 0, rotate: -45 }}
-                  animate={{ y: 0, opacity: 1, rotate: 0 }}
-                  exit={{ y: -10, opacity: 0, rotate: 45 }}
-                  transition={{ duration: 0.2, ease: "easeInOut" }}
-                >
-                  {theme === 'light' ? <Moon size={20} /> : <Sun size={20} />}
-                </motion.div>
-              </AnimatePresence>
-            </motion.button>
+              <Palette size={18} />
+              <span className="hidden sm:inline">Tema</span>
+            </button>
             <button 
               onClick={() => setIsBudgetModalOpen(true)}
               className="flex items-center gap-2 text-sm font-medium text-stone-600 hover:text-stone-900 dark:text-stone-400 dark:hover:text-stone-100 transition-colors px-3 py-2 rounded-md hover:bg-stone-100 dark:hover:bg-stone-800"
             >
               <Settings size={18} />
-              <span className="hidden sm:inline">Bütçe Ayarları</span>
+              <span className="hidden sm:inline">Ayarlar</span>
             </button>
-            {user && (
-              <button 
-                onClick={() => setIsBackupModalOpen(true)}
-                className="flex items-center gap-2 text-sm font-medium text-stone-600 hover:text-stone-900 dark:text-stone-400 dark:hover:text-stone-100 transition-colors px-3 py-2 rounded-md hover:bg-stone-100 dark:hover:bg-stone-800"
-              >
-                <Clock size={18} />
-                <span className="hidden sm:inline">Yedekler</span>
-              </button>
-            )}
           </div>
         </div>
       </header>
 
       <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
-        {isBackupModalOpen && (
-          <BackupModal 
-            onClose={() => setIsBackupModalOpen(false)}
-            backups={backups}
-            onCreate={handleCreateBackup}
-            onRestore={handleRestoreBackup}
-            onDelete={handleDeleteBackup}
-          />
-        )}
-
         {isProgressReportModalOpen && (
           <ProgressReportModal 
             onClose={() => setIsProgressReportModalOpen(false)}
             stats={stats}
             categoryStats={categoryStats}
+          />
+        )}
+
+        {isBudgetAnalysisModalOpen && (
+          <BudgetAnalysisModal 
+            onClose={() => setIsBudgetAnalysisModalOpen(false)}
+            stats={stats}
+            budget={budget}
+            categoryStats={categoryStats}
+            formatCurrency={formatCurrency}
           />
         )}
 
@@ -1035,14 +752,14 @@ export default function App() {
             
             <button
               onClick={() => setIsGroupedByCategory(!isGroupedByCategory)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all whitespace-nowrap ${
+              className={`flex items-center justify-center p-2 rounded-full transition-all ${
                 isGroupedByCategory
                   ? 'bg-stone-800 dark:bg-stone-100 text-white dark:text-stone-900 shadow-sm'
                   : 'bg-white dark:bg-stone-900 text-stone-600 dark:text-stone-400 border border-stone-200 dark:border-stone-800 hover:bg-stone-50 dark:hover:bg-stone-800'
               }`}
+              title="Kategorilere Göre Grupla"
             >
               <Layers size={16} />
-              Kategorilere Göre Grupla
             </button>
 
             <div className="flex items-center bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-full p-1 shadow-sm">
@@ -1138,13 +855,6 @@ export default function App() {
 
       {/* Modals */}
       <AnimatePresence>
-        {isThemeSelectorOpen && (
-          <ThemeSelectorModal 
-            onClose={() => setIsThemeSelectorOpen(false)}
-            currentColorTheme={colorTheme}
-            onSelect={setColorTheme}
-          />
-        )}
         {isAddModalOpen && (
           <ItemModal 
             onClose={() => setIsAddModalOpen(false)} 
@@ -1160,6 +870,16 @@ export default function App() {
             onSubmit={handleEditItem}
             title="Ürünü Düzenle"
             categories={categories}
+          />
+        )}
+        {isThemeModalOpen && (
+          <ThemeModal
+            currentTheme={colorTheme}
+            onThemeChange={(theme) => {
+              setColorTheme(theme);
+              setIsThemeModalOpen(false);
+            }}
+            onClose={() => setIsThemeModalOpen(false)}
           />
         )}
         {isBudgetModalOpen && (
@@ -1246,7 +966,7 @@ function ItemDetailModal({
           {item.image ? (
             <img 
               src={item.image} 
-              alt={item.name} 
+              alt={item.imageAlt || item.name} 
               className="w-full h-full object-cover" 
               referrerPolicy="no-referrer"
             />
@@ -1274,7 +994,7 @@ function ItemDetailModal({
               <h2 className={`text-2xl font-bold mb-1 ${item.isBought ? 'text-stone-500 line-through' : 'text-stone-900 dark:text-stone-100'}`}>
                 {item.name}
               </h2>
-              <p className="text-xl font-bold text-rose-600 dark:text-rose-400">
+              <p className="text-xl font-bold text-accent-600 dark:text-accent-400">
                 {formatCurrency(item.price)}
               </p>
             </div>
@@ -1450,7 +1170,7 @@ function ManageCategoriesModal({
                   setNewCategory(e.target.value);
                   setError('');
                 }}
-                className="flex-1 px-3 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 dark:text-stone-200 transition-all"
+                className="flex-1 px-3 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 dark:text-stone-200 transition-all"
                 placeholder="Kategori adı..."
               />
               <button 
@@ -1461,7 +1181,7 @@ function ManageCategoriesModal({
                 Ekle
               </button>
             </div>
-            {error && <p className="text-rose-500 text-xs mt-1">{error}</p>}
+            {error && <p className="text-accent-500 text-xs mt-1">{error}</p>}
           </form>
 
           <div>
@@ -1479,7 +1199,7 @@ function ManageCategoriesModal({
                           type="text"
                           value={editCategoryName}
                           onChange={e => setEditCategoryName(e.target.value)}
-                          className="flex-1 px-2 py-1 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-all text-sm dark:text-stone-200"
+                          className="flex-1 px-2 py-1 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all text-sm dark:text-stone-200"
                           autoFocus
                           onKeyDown={e => {
                             if (e.key === 'Enter') handleRenameCategory(category);
@@ -1523,7 +1243,7 @@ function ManageCategoriesModal({
                             </button>
                             <button
                               onClick={() => handleDeleteCategory(category)}
-                              className="p-1.5 text-stone-400 dark:text-stone-500 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/30 rounded-lg transition-colors"
+                              className="p-1.5 text-stone-400 dark:text-stone-500 hover:text-accent-600 dark:hover:text-accent-400 hover:bg-accent-50 dark:hover:bg-accent-900/30 rounded-lg transition-colors"
                               title="Sil"
                             >
                               <Trash2 size={16} />
@@ -1588,7 +1308,7 @@ function BudgetAnalysisModal({
             </div>
             <div className="p-4 bg-stone-50 dark:bg-stone-800/50 rounded-2xl border border-stone-100 dark:border-stone-800">
               <p className="text-[10px] text-stone-400 dark:text-stone-500 uppercase tracking-widest font-bold mb-1">Harcanan Tutar</p>
-              <p className="text-xl font-bold text-rose-600 dark:text-rose-400">{formatCurrency(stats.totalSpent)}</p>
+              <p className="text-xl font-bold text-accent-600 dark:text-accent-400">{formatCurrency(stats.totalSpent)}</p>
             </div>
           </div>
 
@@ -1596,7 +1316,7 @@ function BudgetAnalysisModal({
           <div className="space-y-3">
             <div className="flex justify-between items-end">
               <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100">Genel Bütçe Kullanımı</h3>
-              <span className={`text-sm font-bold ${stats.totalSpent > budget ? 'text-rose-500' : 'text-emerald-500'}`}>
+              <span className={`text-sm font-bold ${stats.totalSpent > budget ? 'text-accent-500' : 'text-emerald-500'}`}>
                 %{budget > 0 ? Math.round((stats.totalSpent / budget) * 100) : 0}
               </span>
             </div>
@@ -1605,11 +1325,11 @@ function BudgetAnalysisModal({
                 initial={{ width: 0 }}
                 animate={{ width: `${Math.min(100, budget > 0 ? (stats.totalSpent / budget) * 100 : 0)}%` }}
                 transition={{ duration: 1.2, ease: "circOut" }}
-                className={`h-full rounded-full ${stats.totalSpent > budget ? 'bg-rose-500' : 'bg-emerald-500'}`}
+                className={`h-full rounded-full ${stats.totalSpent > budget ? 'bg-accent-500' : 'bg-emerald-500'}`}
               />
             </div>
             {stats.totalSpent > budget && (
-              <div className="p-3 bg-rose-50 dark:bg-rose-900/20 rounded-xl border border-rose-100 dark:border-rose-900/30 flex items-center gap-2 text-rose-600 dark:text-rose-400 text-xs font-medium">
+              <div className="p-3 bg-accent-50 dark:bg-accent-900/20 rounded-xl border border-accent-100 dark:border-accent-900/30 flex items-center gap-2 text-accent-600 dark:text-accent-400 text-xs font-medium">
                 <Info size={14} />
                 Bütçenizi {formatCurrency(stats.totalSpent - budget)} tutarında aştınız.
               </div>
@@ -1642,7 +1362,7 @@ function BudgetAnalysisModal({
                       initial={{ width: 0 }}
                       animate={{ width: `${Math.min(100, budget > 0 ? (stat.spent / budget) * 100 : 0)}%` }}
                       transition={{ duration: 1, delay: 0.2 }}
-                      className={`h-full rounded-full ${getCategoryColor(stat.category).split(' ')[0].replace('text-', 'bg-')}`}
+                      className={`h-full rounded-full ${getCategoryBgColorSolid(stat.category)}`}
                     />
                   </div>
                 </div>
@@ -1657,80 +1377,6 @@ function BudgetAnalysisModal({
             className="w-full py-3 bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-900 rounded-2xl font-bold hover:opacity-90 transition-opacity"
           >
             Anladım
-          </button>
-        </div>
-      </motion.div>
-    </div>
-  );
-}
-
-function ThemeSelectorModal({ 
-  onClose, 
-  currentColorTheme, 
-  onSelect 
-}: { 
-  onClose: () => void, 
-  currentColorTheme: string, 
-  onSelect: (theme: string) => void 
-}) {
-  const THEMES = [
-    { id: 'rose', name: 'Gül Kurusu', color: 'bg-rose-500' },
-    { id: 'emerald', name: 'Zümrüt Yeşili', color: 'bg-emerald-500' },
-    { id: 'indigo', name: 'Zarif İndigo', color: 'bg-indigo-500' },
-    { id: 'amber', name: 'Sıcak Kehribar', color: 'bg-amber-500' },
-    { id: 'violet', name: 'Asil Menekşe', color: 'bg-violet-500' },
-    { id: 'slate', name: 'Modern Gri', color: 'bg-slate-500' },
-  ];
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/40 dark:bg-stone-950/60 backdrop-blur-sm">
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.95, y: 20 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.95, y: 20 }}
-        className="bg-white dark:bg-stone-900 rounded-3xl shadow-2xl w-full max-w-md overflow-hidden border dark:border-stone-800 flex flex-col"
-      >
-        <div className="p-6 border-b border-stone-100 dark:border-stone-800 flex justify-between items-center">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-accent-50 dark:bg-accent-900/20 rounded-xl">
-              <Sparkles className="text-accent-500" size={24} />
-            </div>
-            <div>
-              <h2 className="text-xl font-semibold text-stone-900 dark:text-white">Tema Seçimi</h2>
-              <p className="text-xs text-stone-500 dark:text-stone-400">Uygulamanın ana rengini değiştirin</p>
-            </div>
-          </div>
-          <button onClick={onClose} className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-200 p-2 hover:bg-stone-100 dark:hover:bg-stone-800 rounded-full transition-colors">
-            <Plus className="rotate-45" size={24} />
-          </button>
-        </div>
-
-        <div className="p-6 grid grid-cols-2 gap-4">
-          {THEMES.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => {
-                onSelect(t.id);
-                onClose();
-              }}
-              className={`flex items-center gap-3 p-3 rounded-2xl border-2 transition-all ${
-                currentColorTheme === t.id 
-                  ? 'border-accent-500 bg-accent-50/50 dark:bg-accent-900/10' 
-                  : 'border-stone-100 dark:border-stone-800 hover:border-stone-200 dark:hover:border-stone-700'
-              }`}
-            >
-              <div className={`w-6 h-6 rounded-full ${t.color} shadow-inner`} />
-              <span className="text-sm font-medium text-stone-700 dark:text-stone-300">{t.name}</span>
-            </button>
-          ))}
-        </div>
-
-        <div className="p-6 border-t border-stone-100 dark:border-stone-800">
-          <button 
-            onClick={onClose}
-            className="w-full py-3 bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-900 rounded-2xl font-bold hover:opacity-90 transition-opacity"
-          >
-            Kapat
           </button>
         </div>
       </motion.div>
@@ -1838,89 +1484,6 @@ function ProgressReportModal({
               Bu rapor, çeyiz listenizdeki her kategorinin tamamlanma durumunu gösterir. %100'e ulaşan kategoriler yeşil ile işaretlenir.
             </p>
           </div>
-        </div>
-      </motion.div>
-    </div>
-  );
-}
-
-function BackupModal({ 
-  onClose, 
-  backups,
-  onCreate,
-  onRestore,
-  onDelete
-}: { 
-  onClose: () => void, 
-  backups: any[],
-  onCreate: () => void,
-  onRestore: (backup: any) => void,
-  onDelete: (id: string) => void
-}) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.95, y: 20 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        className="bg-white dark:bg-stone-900 w-full max-w-md rounded-3xl shadow-2xl overflow-hidden border border-stone-200 dark:border-stone-800"
-      >
-        <div className="p-6 border-b border-stone-100 dark:border-stone-800 flex justify-between items-center">
-          <h2 className="text-xl font-semibold text-stone-900 dark:text-white">Yedekleme ve Geri Yükleme</h2>
-          <button onClick={onClose} className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-200">
-            <Plus className="rotate-45" size={24} />
-          </button>
-        </div>
-        
-        <div className="p-6 space-y-6">
-          <button 
-            onClick={onCreate}
-            className="w-full py-3 bg-indigo-600 text-white rounded-2xl font-medium hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2"
-          >
-            <Plus size={20} />
-            Yeni Yedek Oluştur
-          </button>
-
-          <div className="space-y-3">
-            <h3 className="text-sm font-medium text-stone-500 dark:text-stone-400 uppercase tracking-wider">Mevcut Yedekler</h3>
-            {backups.length === 0 ? (
-              <div className="text-center py-8 text-stone-400 italic text-sm">Henüz yedek bulunmuyor.</div>
-            ) : (
-              <div className="max-h-64 overflow-y-auto space-y-2 pr-2">
-                {backups.map((backup) => (
-                  <div key={backup.id} className="p-3 bg-stone-50 dark:bg-stone-800/50 rounded-xl border border-stone-100 dark:border-stone-800 flex items-center justify-between group">
-                    <div>
-                      <div className="text-sm font-medium text-stone-900 dark:text-stone-100">
-                        {new Date(backup.timestamp).toLocaleString('tr-TR')}
-                      </div>
-                      <div className="text-xs text-stone-500">{backup.items.length} Ürün</div>
-                    </div>
-                    <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button 
-                        onClick={() => onRestore(backup)}
-                        className="p-2 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 rounded-lg transition-colors"
-                        title="Geri Yükle"
-                      >
-                        <Clock size={18} />
-                      </button>
-                      <button 
-                        onClick={() => onDelete(backup.id)}
-                        className="p-2 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition-colors"
-                        title="Sil"
-                      >
-                        <Trash2 size={18} />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-        
-        <div className="p-6 bg-stone-50 dark:bg-stone-800/30 border-t border-stone-100 dark:border-stone-800">
-          <p className="text-xs text-stone-500 dark:text-stone-400 leading-relaxed">
-            Yedekleriniz güvenli bir şekilde bulutta saklanır. Herhangi bir cihazdan giriş yaparak verilerinize erişebilir ve geri yükleyebilirsiniz.
-          </p>
         </div>
       </motion.div>
     </div>
@@ -2053,6 +1616,7 @@ function ItemModal({
   const [notes, setNotes] = useState(item?.notes || '');
   const [link, setLink] = useState(item?.link || '');
   const [image, setImage] = useState(item?.image || '');
+  const [imageAlt, setImageAlt] = useState(item?.imageAlt || '');
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -2076,7 +1640,8 @@ function ItemModal({
       price: Number(price),
       notes: notes.trim() || undefined,
       link: link.trim() || undefined,
-      image: image || undefined
+      image: image || undefined,
+      imageAlt: imageAlt.trim() || undefined
     });
   };
 
@@ -2170,6 +1735,18 @@ function ItemModal({
               </label>
             </div>
           </div>
+          {image && (
+            <div>
+              <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1">Görsel Alternatif Metni (Erişilebilirlik)</label>
+              <input 
+                type="text" 
+                value={imageAlt}
+                onChange={e => setImageAlt(e.target.value)}
+                className="w-full px-3 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 dark:text-stone-200 transition-all"
+                placeholder="Görseli betimleyin (örn: Beyaz porselen yemek takımı)"
+              />
+            </div>
+          )}
           <div className="pt-4 flex gap-3">
             <button 
               type="button" 
@@ -2186,6 +1763,69 @@ function ItemModal({
             </button>
           </div>
         </form>
+      </motion.div>
+    </div>
+  );
+}
+
+function ThemeModal({
+  onClose,
+  currentTheme,
+  onThemeChange
+}: {
+  onClose: () => void,
+  currentTheme: string,
+  onThemeChange: (theme: 'rose' | 'emerald' | 'indigo' | 'amber' | 'violet' | 'slate') => void
+}) {
+  const themes = [
+    { id: 'rose', name: 'Gül (Varsayılan)', color: 'bg-rose-500' },
+    { id: 'emerald', name: 'Zümrüt', color: 'bg-emerald-500' },
+    { id: 'indigo', name: 'Çivit', color: 'bg-indigo-500' },
+    { id: 'amber', name: 'Kehribar', color: 'bg-amber-500' },
+    { id: 'violet', name: 'Menekşe', color: 'bg-violet-500' },
+    { id: 'slate', name: 'Arduvaz', color: 'bg-slate-500' },
+  ];
+
+  return (
+    <div className="fixed inset-0 bg-stone-900/50 dark:bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className="bg-white dark:bg-stone-900 rounded-2xl shadow-xl w-full max-w-md overflow-hidden"
+      >
+        <div className="px-6 py-4 border-b border-stone-100 dark:border-stone-800 flex items-center justify-between bg-stone-50/50 dark:bg-stone-800/50">
+          <h2 className="text-lg font-semibold text-stone-900 dark:text-white flex items-center gap-2">
+            <Palette size={20} className="text-accent-500" />
+            Tema Ayarları
+          </h2>
+          <button 
+            onClick={onClose}
+            className="p-2 text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800 rounded-xl transition-colors"
+          >
+            <Plus className="rotate-45" size={20} />
+          </button>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            {themes.map(theme => (
+              <button
+                key={theme.id}
+                onClick={() => onThemeChange(theme.id as any)}
+                className={`flex items-center gap-3 p-3 rounded-xl border transition-all ${
+                  currentTheme === theme.id 
+                    ? 'border-accent-500 bg-accent-50 dark:bg-accent-900/20 text-accent-700 dark:text-accent-300' 
+                    : 'border-stone-200 dark:border-stone-700 hover:border-accent-200 dark:hover:border-accent-800 text-stone-700 dark:text-stone-300 hover:bg-stone-50 dark:hover:bg-stone-800'
+                }`}
+              >
+                <div className={`w-6 h-6 rounded-full ${theme.color} shadow-sm flex items-center justify-center`}>
+                  {currentTheme === theme.id && <CheckCircle2 size={14} className="text-white" />}
+                </div>
+                <span className="font-medium text-sm">{theme.name}</span>
+              </button>
+            ))}
+          </div>
+        </div>
       </motion.div>
     </div>
   );
@@ -2373,7 +2013,7 @@ function BudgetModal({
                     onClose();
                   }
                 }}
-                className="flex items-center justify-center gap-2 px-4 py-2 border border-rose-200 dark:border-rose-900/30 text-rose-600 dark:text-rose-400 rounded-xl font-medium hover:bg-rose-50 dark:hover:bg-rose-900/20 transition-colors text-sm"
+                className="flex items-center justify-center gap-2 px-4 py-2 border border-accent-200 dark:border-accent-900/30 text-accent-600 dark:text-accent-400 rounded-xl font-medium hover:bg-accent-50 dark:hover:bg-accent-900/20 transition-colors text-sm"
               >
                 <Trash2 size={16} />
                 Tüm Verileri Sıfırla
@@ -2435,7 +2075,7 @@ function ReportModal({
       >
         <div className="px-6 py-4 border-b border-stone-100 dark:border-stone-800 flex justify-between items-center flex-shrink-0">
           <h2 className="text-lg font-semibold text-stone-900 dark:text-stone-100 flex items-center gap-2">
-            <FileText size={20} className="text-rose-500" />
+            <FileText size={20} className="text-accent-500" />
             Çeyiz Raporu
           </h2>
           <button onClick={onClose} className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 p-1">
@@ -2452,9 +2092,9 @@ function ReportModal({
                 <p className="text-xs text-stone-500 dark:text-stone-400 mb-1">Toplam Bütçe</p>
                 <p className="text-lg font-semibold text-stone-900 dark:text-stone-100">{formatCurrency(budget)}</p>
               </div>
-              <div className="bg-rose-50 dark:bg-rose-900/20 p-4 rounded-xl border border-rose-100 dark:border-rose-900/30">
-                <p className="text-xs text-rose-600 dark:text-rose-400 mb-1">Harcanan</p>
-                <p className="text-lg font-semibold text-rose-700 dark:text-rose-300">{formatCurrency(stats.totalSpent)}</p>
+              <div className="bg-accent-50 dark:bg-accent-900/20 p-4 rounded-xl border border-accent-100 dark:border-accent-900/30">
+                <p className="text-xs text-accent-600 dark:text-accent-400 mb-1">Harcanan</p>
+                <p className="text-lg font-semibold text-accent-700 dark:text-accent-300">{formatCurrency(stats.totalSpent)}</p>
               </div>
               <div className="bg-emerald-50 dark:bg-emerald-900/20 p-4 rounded-xl border border-emerald-100 dark:border-emerald-900/30">
                 <p className="text-xs text-emerald-600 dark:text-emerald-400 mb-1">Kalan Bütçe</p>
